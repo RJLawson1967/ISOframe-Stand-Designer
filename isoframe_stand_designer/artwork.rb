@@ -264,7 +264,6 @@ module ISOframe
       def map_table_instance!(table_inst, image_path)
         return 0 unless table_inst && table_inst.valid?
         defn = table_inst.definition
-        # Make definition unique so tagging/ensure does not mutate other instances.
         begin
           if defn.respond_to?(:make_unique) && defn.count_instances.to_i > 1
             table_inst.make_unique if table_inst.respond_to?(:make_unique)
@@ -274,21 +273,31 @@ module ISOframe
           nil
         end
 
-        # v0.1.57: purge flat synthetic panels; paint real curved lip/apron only.
+        # v0.1.58: never require a named "under-table graphic group".
+        # Prefer SKP keyboard lip when present; always fall back to painting
+        # real apron faces on the baked table (skip posts/feet). No synthetic plane.
         Tables.purge_synthetic_table_graphic_panels!(defn)
         target = Tables.ensure_table_graphic_group!(defn, 'TableGraphicHint')
-        lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
-        lip = target if lip.nil? && target && target.valid? && !Tables.synthetic_table_graphic?(target)
-
-        raise 'No under-table graphic group in keyboard table' if lip.nil? || !lip.valid?
-        raise 'Refusing to paint synthetic flat panel' if Tables.synthetic_table_graphic?(lip)
+        if target && Tables.synthetic_table_graphic?(target)
+          target = nil
+        end
 
         mid = Attributes.get(table_inst, Constants::KEY_TABLE_HOST, 'table').to_s
         mat = ensure_table_material!(table_inst.model, mid, image_path)
-        painted = map_table_lip_faces!(lip, mat)
-        # If lip facets were filtered too aggressively, paint all non-floor faces.
-        painted = map_table_graphic_group!(lip, mat) if painted <= 0
-        raise 'No under-table graphic faces found to paint.' if painted <= 0
+
+        painted = 0
+        if target && target.valid?
+          painted = map_table_lip_faces!(target, mat)
+          painted = map_table_graphic_group!(target, mat) if painted <= 0
+        end
+        # Face fallback — works even when lip name was lost after older bakes.
+        if painted <= 0
+          painted = map_table_apron_faces_from_definition!(defn, mat)
+        end
+        if painted <= 0
+          raise 'No under-table graphic faces found to paint on the keyboard table. ' \
+                'Try Keyboard Table off/on once, then Apply Table Artwork again.'
+        end
         painted
       end
 
@@ -298,17 +307,26 @@ module ISOframe
         apron = faces.select do |f|
           next false unless f.valid?
           n = f.normal
-          # Skip floor/ceiling; keep curved vertical-ish facets.
           next false if n.z.abs >= 0.92
           face_area_mm2(f) >= 20.0
         end
-        return 0 if apron.empty?
+        paint_apron_faces!(apron, material)
+      end
 
+      # Paint non-horizontal faces from the whole baked table, skipping posts/feet.
+      def map_table_apron_faces_from_definition!(defn, material)
+        faces = Tables.collect_apron_faces_from_definition(defn)
+        paint_apron_faces!(faces, material)
+      end
+
+      def paint_apron_faces!(faces, material)
+        return 0 if faces.nil? || faces.empty?
         bay_w = Constants::GRAPHIC_BAY_MM.mm
-        tex_w, tex_h = texture_dims(material, bay_w, 1000.mm)
+        tex_w, _tex_h = texture_dims(material, bay_w, 1000.mm)
         painted = 0
-        apron.each do |face|
+        faces.each do |face|
           begin
+            next unless face.valid?
             face.material = material
             face.back_material = material
             verts = face.outer_loop.vertices.map(&:position)
