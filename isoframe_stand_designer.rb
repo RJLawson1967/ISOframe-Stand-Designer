@@ -9,7 +9,7 @@ require 'extensions.rb'
 module ISOframe
   module StandDesigner
     EXTENSION_NAME = 'ISOframe Stand Designer'
-    EXTENSION_VERSION = '0.1.55'
+    EXTENSION_VERSION = '0.1.56'
 
     unless file_loaded?(__FILE__)
       ex = SketchupExtension.new(

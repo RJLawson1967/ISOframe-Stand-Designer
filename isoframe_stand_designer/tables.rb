@@ -17,6 +17,10 @@
 # two rotations, then flip 180° looking from either side (+180° about +X).
 # Also: Apply Table Artwork — match SKP GraphicHint / Rolable / Graphic Keyboard
 # Attachment names (depth-0 after explode), ensure TableGraphicHint exists.
+# v0.1.56: placement offsets (front view: 19.5 mm closer = −Y, 19.6 mm left = +X).
+# Artwork root cause: SKP GraphicHint groups belong only to Wave modules — the
+# under-table apron is "exhibit and wave keyboard lip". Match lip/top; ensure
+# must not rely on top-level faces after explode of nested components.
 
 module ISOframe
   module StandDesigner
@@ -28,12 +32,18 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v54 bake/pose.
-          defn_name: 'ISOframe Table Keyboard SKP v55',
+          # Fresh name so dealers drop any cached v43–v55 bake/pose.
+          defn_name: 'ISOframe Table Keyboard SKP v56',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
       }.freeze
+
+      # Wave-local placement nudge after orientation bake (identity pose in def).
+      # Looking from the front of the starter (graphic +Y / viewer looks −Y):
+      #   closer to module = −Y; viewer left = +X.
+      PLACE_CLOSER_MM = 19.5
+      PLACE_LEFT_MM = 19.6
 
       SKP_KEYBOARD = 'Keyboard_with_Extension.skp'
       # Definition names in Keyboard_with_Extension.skp (Richard):
@@ -65,21 +75,27 @@ module ISOframe
         led\s*flood|
         flood\s*light
       /ix
-      # Under-table graphic names in Keyboard_with_Extension.skp:
-      #   nested groups "GraphicHint"; DC wrap suffix
-      #   "…Graphic Keyboard Attachment (Rolable)"; stable tag TableGraphicHint.
+      # Under-table graphic targets in Keyboard_with_Extension.skp:
+      #   Primary apron: "exhibit and wave keyboard lip" (NOT Wave GraphicHint —
+      #   those 16 GraphicHint groups are wall panels on starters/extensions).
+      #   Also: keyboard top, DC "Graphic Keyboard Attachment (Rolable)", tag.
       TABLE_GRAPHIC_RE = /
         table\s*graphic\s*hint|
         graphic\s*hint|
         graphic\s*keyboard|
         table\s*graphic|
         keyboard\s*attachment\s*wrap|
+        keyboard\s*lip|
+        table\s*attachment\s*keyboard\s*(lip|top)|
+        exhibit\s+and\s+wave\s+keyboard\s+lip|
         rolable
       /ix
       TABLE_GRAPHIC_FIND_RE = /
         TableGraphicHint|
         GraphicHint|
         Graphic\s*Keyboard|
+        keyboard\s*lip|
+        keyboard\s*top|
         Rolable
       /ix
       # Bay-center fallback when SKP pair discovery fails (mm → inches via .mm).
@@ -402,10 +418,20 @@ module ISOframe
         raise 'Baked keyboard definition is empty' if defn.entities.size == 0
 
         tag_table_graphic_groups!(defn, entry[:graphic_group])
-        ensure_table_graphic_group!(defn, entry[:graphic_group])
-        # Pose is baked into the definition → place sibling at host.transformation.
-        cache_attach_local!(model, Geom::Transformation.new)
+        ensured = ensure_table_graphic_group!(defn, entry[:graphic_group])
+        puts "[ISOframe] Keyboard table graphic target=" \
+             "#{ensured ? (ensured.respond_to?(:name) ? ensured.name : ensured.class) : 'NONE'}"
+        # Pose orientation is baked into the definition; placement keeps a small
+        # Wave-local XY offset (v0.1.56) relative to the host.
+        cache_attach_local!(model, placement_offset_transform)
         defn
+      end
+
+      # Wave-local translation: +X = viewer left from front, −Y = closer to module.
+      def placement_offset_transform
+        Geom::Transformation.translation(
+          Geom::Vector3d.new(PLACE_LEFT_MM.mm, -PLACE_CLOSER_MM.mm, 0)
+        )
       end
 
       # Prefer: (1) ComponentDefinition matching wrap/attach names,
@@ -568,11 +594,12 @@ module ISOframe
         0
       end
 
-      # Local transform of baked def relative to host (identity — pose baked in).
+      # Local transform of baked def relative to host.
+      # Orientation is baked into the definition; placement keeps Wave-local XY offset.
       def attach_local_transform(model, entry)
         keyboard_definition!(model, entry) # ensure baked
         @attach_local_by_model ||= {}
-        @attach_local_by_model[model.object_id] || Geom::Transformation.new
+        @attach_local_by_model[model.object_id] || placement_offset_transform
       end
 
       def cache_attach_local!(model, tr)
@@ -944,11 +971,20 @@ module ISOframe
         end
       end
 
-      # Bake + Apply time: tag SKP names, then create TableGraphicHint if still missing.
+      # Bake + Apply time: tag SKP lip/graphic names, else create a paint target.
       def ensure_table_graphic_group!(defn, stable_name = 'TableGraphicHint')
         return nil unless defn && defn.valid?
         name = (stable_name || 'TableGraphicHint').to_s
         tag_table_graphic_groups!(defn, name)
+
+        # Prefer keyboard lip instance (real under-table apron in the SKP).
+        lip = find_keyboard_lip_entity(defn.entities, 0)
+        if lip && lip.valid?
+          lip.name = name if lip.respond_to?(:name=)
+          puts "[ISOframe] table graphic = keyboard lip → #{name}"
+          return lip
+        end
+
         existing = table_graphic_groups(defn)
         return existing.first if existing.any?
 
@@ -960,27 +996,48 @@ module ISOframe
         nil
       end
 
-      # Last resort: group the largest vertical-ish faces into TableGraphicHint so
-      # Apply Table Artwork has a paint target when SKP names were lost on explode.
-      def create_table_graphic_hint_group!(defn, stable_name)
-        faces = []
-        gather_faces = lambda do |entities, depth|
-          return if entities.nil? || depth > 6
-          entities.each do |e|
-            if e.is_a?(Sketchup::Face) && e.valid?
-              faces << e
-            elsif e.is_a?(Sketchup::Group)
-              gather_faces.call(e.entities, depth + 1)
-            elsif e.is_a?(Sketchup::ComponentInstance)
-              gather_faces.call(e.definition.entities, depth + 1)
+      # Walk baked table for "keyboard lip" / Table Attachment Keyboard Lip.
+      def find_keyboard_lip_entity(entities, depth)
+        return nil if entities.nil? || depth > 8
+        entities.each do |e|
+          if e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+            next unless e.valid?
+            iname = e.name.to_s
+            dname = e.respond_to?(:definition) ? e.definition.name.to_s : ''
+            if iname =~ /keyboard\s*lip/i || dname =~ /keyboard\s*lip/i ||
+               iname =~ /table\s*attachment\s*keyboard\s*lip/i ||
+               dname =~ /table\s*attachment\s*keyboard\s*lip/i
+              return e
             end
+            nested = if e.is_a?(Sketchup::Group)
+                       find_keyboard_lip_entity(e.entities, depth + 1)
+                     else
+                       find_keyboard_lip_entity(e.definition.entities, depth + 1)
+                     end
+            return nested if nested
           end
         end
-        gather_faces.call(defn.entities, 0)
+        nil
+      end
 
-        # Prefer large non-horizontal faces (apron / under-table panel).
-        candidates = faces.select do |f|
-          next false unless f.valid?
+      # Create a paint target when lip/GraphicHint were not found.
+      # v0.1.55 failed here: after explode, faces stay inside nested ComponentInstances
+      # (base/lip/top/posts), so "direct faces in baked def" was always empty.
+      def create_table_graphic_hint_group!(defn, stable_name)
+        # 1) Rename lip/top component instances in place (no face move needed).
+        candidate = find_keyboard_lip_entity(defn.entities, 0)
+        unless candidate
+          candidate = find_named_table_panel_entity(defn.entities, 0)
+        end
+        if candidate && candidate.valid?
+          candidate.name = stable_name.to_s if candidate.respond_to?(:name=)
+          return candidate
+        end
+
+        # 2) Explode one level of nested instances to expose faces, then group.
+        explode_nested_instances_once!(defn.entities)
+        direct_faces = defn.entities.grep(Sketchup::Face).select(&:valid?)
+        vertical = direct_faces.select do |f|
           n = f.normal
           next false if n.z.abs >= 0.85
           begin
@@ -989,16 +1046,91 @@ module ISOframe
             false
           end
         end
-        # Only group faces that still live directly in the baked def (movable).
-        direct = candidates.select { |f| f.parent == defn.entities }
-        direct = faces.select { |f| f.valid? && f.parent == defn.entities } if direct.empty?
-        return nil if direct.empty?
+        use = vertical.any? ? vertical : direct_faces
+        if use.any?
+          group = defn.entities.add_group(use)
+          group.name = stable_name.to_s
+          return group
+        end
 
-        group = defn.entities.add_group(direct)
-        group.name = stable_name.to_s
-        group
+        # 3) Last resort: synthesize a thin vertical panel from definition bounds.
+        synthesize_table_graphic_panel!(defn, stable_name)
       rescue StandardError => e
         puts "[ISOframe] create_table_graphic_hint_group! failed: #{e.message}"
+        nil
+      end
+
+      def find_named_table_panel_entity(entities, depth)
+        return nil if entities.nil? || depth > 8
+        best = nil
+        entities.each do |e|
+          next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+          next unless e.valid?
+          iname = e.name.to_s
+          dname = e.respond_to?(:definition) ? e.definition.name.to_s : ''
+          if table_graphic_name?(iname, dname) ||
+             iname =~ /keyboard\s*top/i || dname =~ /keyboard\s*top/i
+            best = e
+            break if iname =~ /lip/i || dname =~ /lip/i
+          end
+          nested = if e.is_a?(Sketchup::Group)
+                     find_named_table_panel_entity(e.entities, depth + 1)
+                   else
+                     find_named_table_panel_entity(e.definition.entities, depth + 1)
+                   end
+          best = nested if nested && best.nil?
+        end
+        best
+      end
+
+      def explode_nested_instances_once!(entities)
+        return if entities.nil?
+        entities.to_a.each do |e|
+          next unless e.valid? && e.is_a?(Sketchup::ComponentInstance)
+          iname = e.name.to_s
+          dname = e.definition.name.to_s
+          # Explode lip/top/wrap parts; leave posts/feet alone when possible.
+          next unless table_graphic_name?(iname, dname) ||
+                      iname =~ /keyboard\s*(lip|top|base)/i ||
+                      dname =~ /keyboard\s*(lip|top|base)/i ||
+                      dname =~ /attachment\s*wrap/i
+          begin
+            e.explode
+          rescue StandardError
+            nil
+          end
+        end
+      end
+
+      # Build a paintable vertical face group from the baked table bounds.
+      def synthesize_table_graphic_panel!(defn, stable_name)
+        bb = defn.bounds
+        return nil if bb.nil? || bb.empty?
+        min = bb.min
+        max = bb.max
+        # Front apron: near max Y (graphic +Y), spanning X, mid-height band.
+        y = max.y
+        z0 = min.z + (max.z - min.z) * 0.15
+        z1 = min.z + (max.z - min.z) * 0.85
+        x0 = min.x
+        x1 = max.x
+        return nil if (x1 - x0).abs < 1e-6 || (z1 - z0).abs < 1e-6
+
+        group = defn.entities.add_group
+        group.name = stable_name.to_s
+        face = group.entities.add_face(
+          Geom::Point3d.new(x0, y, z0),
+          Geom::Point3d.new(x1, y, z0),
+          Geom::Point3d.new(x1, y, z1),
+          Geom::Point3d.new(x0, y, z1)
+        )
+        # Face toward −Y (viewer) if SketchUp flipped it.
+        if face && face.valid? && face.normal.y > 0
+          face.reverse!
+        end
+        group
+      rescue StandardError => e
+        puts "[ISOframe] synthesize_table_graphic_panel! failed: #{e.message}"
         nil
       end
 

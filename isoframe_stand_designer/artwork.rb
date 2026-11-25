@@ -266,25 +266,25 @@ module ISOframe
         defn = table_inst.definition
         # Make definition unique so tagging/ensure does not mutate other instances.
         begin
-          defn = defn.make_unique if defn.respond_to?(:make_unique) && defn.count_instances.to_i > 1
+          if defn.respond_to?(:make_unique) && defn.count_instances.to_i > 1
+            table_inst.make_unique if table_inst.respond_to?(:make_unique)
+            defn = table_inst.definition
+          end
         rescue StandardError
           nil
         end
+
+        # v0.1.56: real under-table apron is SKP "keyboard lip" (Wave GraphicHint
+        # groups are wall-only and never appear inside the baked keyboard def).
+        target = Tables.ensure_table_graphic_group!(defn, 'TableGraphicHint')
         groups = Tables.table_graphic_groups(defn)
+        groups = [target] if groups.empty? && target && target.valid?
+
         if groups.empty?
-          Tables.ensure_table_graphic_group!(defn, 'TableGraphicHint')
-          groups = Tables.table_graphic_groups(defn)
+          lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
+          groups = [lip] if lip && lip.valid?
         end
-        # Top-level fallback (SKP GraphicHint / Rolable names).
-        if groups.empty?
-          groups = defn.entities.select do |g|
-            next false unless g.is_a?(Sketchup::Group) || g.is_a?(Sketchup::ComponentInstance)
-            next false unless g.valid?
-            iname = g.name.to_s
-            dname = g.respond_to?(:definition) ? g.definition.name.to_s : ''
-            Tables.table_graphic_name?(iname, dname)
-          end
-        end
+
         raise 'No under-table graphic group in keyboard table' if groups.empty?
 
         mid = Attributes.get(table_inst, Constants::KEY_TABLE_HOST, 'table').to_s
@@ -293,6 +293,11 @@ module ISOframe
         groups.each do |group|
           painted += map_table_graphic_group!(group, mat)
         end
+        # If lip/group had no qualifying faces, try painting whole table faces.
+        if painted <= 0
+          painted = map_table_graphic_group!(defn, mat)
+        end
+        raise 'No under-table graphic faces found to paint.' if painted <= 0
         painted
       end
 
