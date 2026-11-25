@@ -274,30 +274,60 @@ module ISOframe
           nil
         end
 
-        # v0.1.56: real under-table apron is SKP "keyboard lip" (Wave GraphicHint
-        # groups are wall-only and never appear inside the baked keyboard def).
+        # v0.1.57: purge flat synthetic panels; paint real curved lip/apron only.
+        Tables.purge_synthetic_table_graphic_panels!(defn)
         target = Tables.ensure_table_graphic_group!(defn, 'TableGraphicHint')
-        groups = Tables.table_graphic_groups(defn)
-        groups = [target] if groups.empty? && target && target.valid?
+        lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
+        lip = target if lip.nil? && target && target.valid? && !Tables.synthetic_table_graphic?(target)
 
-        if groups.empty?
-          lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
-          groups = [lip] if lip && lip.valid?
-        end
-
-        raise 'No under-table graphic group in keyboard table' if groups.empty?
+        raise 'No under-table graphic group in keyboard table' if lip.nil? || !lip.valid?
+        raise 'Refusing to paint synthetic flat panel' if Tables.synthetic_table_graphic?(lip)
 
         mid = Attributes.get(table_inst, Constants::KEY_TABLE_HOST, 'table').to_s
         mat = ensure_table_material!(table_inst.model, mid, image_path)
-        painted = 0
-        groups.each do |group|
-          painted += map_table_graphic_group!(group, mat)
-        end
-        # If lip/group had no qualifying faces, try painting whole table faces.
-        if painted <= 0
-          painted = map_table_graphic_group!(defn, mat)
-        end
+        painted = map_table_lip_faces!(lip, mat)
+        # If lip facets were filtered too aggressively, paint all non-floor faces.
+        painted = map_table_graphic_group!(lip, mat) if painted <= 0
         raise 'No under-table graphic faces found to paint.' if painted <= 0
+        painted
+      end
+
+      # Paint curved apron faces inside the SKP keyboard lip (small facets OK).
+      def map_table_lip_faces!(lip, material)
+        faces = collect_faces_deep(lip, 0)
+        apron = faces.select do |f|
+          next false unless f.valid?
+          n = f.normal
+          # Skip floor/ceiling; keep curved vertical-ish facets.
+          next false if n.z.abs >= 0.92
+          face_area_mm2(f) >= 20.0
+        end
+        return 0 if apron.empty?
+
+        bay_w = Constants::GRAPHIC_BAY_MM.mm
+        tex_w, tex_h = texture_dims(material, bay_w, 1000.mm)
+        painted = 0
+        apron.each do |face|
+          begin
+            face.material = material
+            face.back_material = material
+            verts = face.outer_loop.vertices.map(&:position)
+            if verts.size >= 2
+              a = verts.min_by(&:x)
+              b = verts.max_by(&:x)
+              uv_a = Geom::Point3d.new(0, a.z, 0)
+              uv_b = Geom::Point3d.new(tex_w, b.z, 0)
+              begin
+                face.position_material(material, [a, uv_a, b, uv_b], true)
+              rescue StandardError
+                nil
+              end
+            end
+            painted += 1
+          rescue StandardError
+            nil
+          end
+        end
         painted
       end
 

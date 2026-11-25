@@ -21,6 +21,9 @@
 # Artwork root cause: SKP GraphicHint groups belong only to Wave modules — the
 # under-table apron is "exhibit and wave keyboard lip". Match lip/top; ensure
 # must not rely on top-level faces after explode of nested components.
+# v0.1.57: LOCK position offsets + orientation. Stop synthesizing flat artwork
+# panels; purge any prior zero-thickness TableGraphicHint planes; paint the
+# real curved keyboard lip/apron faces only.
 
 module ISOframe
   module StandDesigner
@@ -32,18 +35,21 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v55 bake/pose.
-          defn_name: 'ISOframe Table Keyboard SKP v56',
+          # Fresh name so dealers drop any cached v43–v56 bake (incl. synthetic panel).
+          defn_name: 'ISOframe Table Keyboard SKP v57',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
       }.freeze
 
+      # LOCKED v0.1.56 — do not change unless Richard asks.
       # Wave-local placement nudge after orientation bake (identity pose in def).
       # Looking from the front of the starter (graphic +Y / viewer looks −Y):
       #   closer to module = −Y; viewer left = +X.
       PLACE_CLOSER_MM = 19.5
       PLACE_LEFT_MM = 19.6
+      # Attribute on synthetic zero-thickness panels (v0.1.56 mistake) for purge.
+      KEY_SYNTHETIC_TABLE_GRAPHIC = 'isoframe_synthetic_table_graphic'
 
       SKP_KEYBOARD = 'Keyboard_with_Extension.skp'
       # Definition names in Keyboard_with_Extension.skp (Richard):
@@ -417,12 +423,13 @@ module ISOframe
         end
         raise 'Baked keyboard definition is empty' if defn.entities.size == 0
 
+        purge_synthetic_table_graphic_panels!(defn)
         tag_table_graphic_groups!(defn, entry[:graphic_group])
         ensured = ensure_table_graphic_group!(defn, entry[:graphic_group])
         puts "[ISOframe] Keyboard table graphic target=" \
              "#{ensured ? (ensured.respond_to?(:name) ? ensured.name : ensured.class) : 'NONE'}"
         # Pose orientation is baked into the definition; placement keeps a small
-        # Wave-local XY offset (v0.1.56) relative to the host.
+        # Wave-local XY offset (LOCKED v0.1.56) relative to the host.
         cache_attach_local!(model, placement_offset_transform)
         defn
       end
@@ -971,26 +978,36 @@ module ISOframe
         end
       end
 
-      # Bake + Apply time: tag SKP lip/graphic names, else create a paint target.
+      # Bake + Apply: real SKP lip/apron only — never synthesize a flat panel.
       def ensure_table_graphic_group!(defn, stable_name = 'TableGraphicHint')
         return nil unless defn && defn.valid?
         name = (stable_name || 'TableGraphicHint').to_s
+        purged = purge_synthetic_table_graphic_panels!(defn)
+        puts "[ISOframe] purged synthetic table panels=#{purged}" if purged > 0
         tag_table_graphic_groups!(defn, name)
 
-        # Prefer keyboard lip instance (real under-table apron in the SKP).
         lip = find_keyboard_lip_entity(defn.entities, 0)
         if lip && lip.valid?
+          # Keep lip identity in definition name; tag instance for artwork lookup.
           lip.name = name if lip.respond_to?(:name=)
           puts "[ISOframe] table graphic = keyboard lip → #{name}"
           return lip
         end
 
-        existing = table_graphic_groups(defn)
-        return existing.first if existing.any?
+        # Secondary: keyboard top (still real SKP geometry — not a new plane).
+        top = find_keyboard_top_entity(defn.entities, 0)
+        if top && top.valid?
+          top.name = name if top.respond_to?(:name=)
+          puts "[ISOframe] table graphic = keyboard top → #{name}"
+          return top
+        end
 
-        created = create_table_graphic_hint_group!(defn, name)
-        puts "[ISOframe] ensure_table_graphic_group! created=#{!created.nil?}"
-        created
+        # Prefer existing non-synthetic tagged groups/instances.
+        real = table_graphic_groups(defn).reject { |e| synthetic_table_graphic?(e) }
+        return real.first if real.any?
+
+        puts '[ISOframe] ensure_table_graphic_group!: no real lip/apron found'
+        nil
       rescue StandardError => e
         puts "[ISOframe] ensure_table_graphic_group! failed: #{e.message}"
         nil
@@ -1002,11 +1019,10 @@ module ISOframe
         entities.each do |e|
           if e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
             next unless e.valid?
+            next if synthetic_table_graphic?(e)
             iname = e.name.to_s
             dname = e.respond_to?(:definition) ? e.definition.name.to_s : ''
-            if iname =~ /keyboard\s*lip/i || dname =~ /keyboard\s*lip/i ||
-               iname =~ /table\s*attachment\s*keyboard\s*lip/i ||
-               dname =~ /table\s*attachment\s*keyboard\s*lip/i
+            if lip_name?(iname, dname)
               return e
             end
             nested = if e.is_a?(Sketchup::Group)
@@ -1020,118 +1036,94 @@ module ISOframe
         nil
       end
 
-      # Create a paint target when lip/GraphicHint were not found.
-      # v0.1.55 failed here: after explode, faces stay inside nested ComponentInstances
-      # (base/lip/top/posts), so "direct faces in baked def" was always empty.
-      def create_table_graphic_hint_group!(defn, stable_name)
-        # 1) Rename lip/top component instances in place (no face move needed).
-        candidate = find_keyboard_lip_entity(defn.entities, 0)
-        unless candidate
-          candidate = find_named_table_panel_entity(defn.entities, 0)
-        end
-        if candidate && candidate.valid?
-          candidate.name = stable_name.to_s if candidate.respond_to?(:name=)
-          return candidate
-        end
-
-        # 2) Explode one level of nested instances to expose faces, then group.
-        explode_nested_instances_once!(defn.entities)
-        direct_faces = defn.entities.grep(Sketchup::Face).select(&:valid?)
-        vertical = direct_faces.select do |f|
-          n = f.normal
-          next false if n.z.abs >= 0.85
-          begin
-            (f.area.to_f * 25.4 * 25.4) >= 400.0
-          rescue StandardError
-            false
+      def find_keyboard_top_entity(entities, depth)
+        return nil if entities.nil? || depth > 8
+        entities.each do |e|
+          if e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+            next unless e.valid?
+            next if synthetic_table_graphic?(e)
+            iname = e.name.to_s
+            dname = e.respond_to?(:definition) ? e.definition.name.to_s : ''
+            if iname =~ /keyboard\s*top/i || dname =~ /keyboard\s*top/i ||
+               iname =~ /table\s*attachment\s*keyboard\s*top/i ||
+               dname =~ /table\s*attachment\s*keyboard\s*top/i
+              return e
+            end
+            nested = if e.is_a?(Sketchup::Group)
+                       find_keyboard_top_entity(e.entities, depth + 1)
+                     else
+                       find_keyboard_top_entity(e.definition.entities, depth + 1)
+                     end
+            return nested if nested
           end
         end
-        use = vertical.any? ? vertical : direct_faces
-        if use.any?
-          group = defn.entities.add_group(use)
-          group.name = stable_name.to_s
-          return group
-        end
-
-        # 3) Last resort: synthesize a thin vertical panel from definition bounds.
-        synthesize_table_graphic_panel!(defn, stable_name)
-      rescue StandardError => e
-        puts "[ISOframe] create_table_graphic_hint_group! failed: #{e.message}"
         nil
       end
 
-      def find_named_table_panel_entity(entities, depth)
-        return nil if entities.nil? || depth > 8
-        best = nil
-        entities.each do |e|
-          next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
-          next unless e.valid?
-          iname = e.name.to_s
-          dname = e.respond_to?(:definition) ? e.definition.name.to_s : ''
-          if table_graphic_name?(iname, dname) ||
-             iname =~ /keyboard\s*top/i || dname =~ /keyboard\s*top/i
-            best = e
-            break if iname =~ /lip/i || dname =~ /lip/i
-          end
-          nested = if e.is_a?(Sketchup::Group)
-                     find_named_table_panel_entity(e.entities, depth + 1)
-                   else
-                     find_named_table_panel_entity(e.definition.entities, depth + 1)
-                   end
-          best = nested if nested && best.nil?
-        end
-        best
+      def lip_name?(iname, dname)
+        n = "#{iname} #{dname}"
+        !!(n =~ /keyboard\s*lip/i || n =~ /table\s*attachment\s*keyboard\s*lip/i ||
+           n =~ /exhibit\s+and\s+wave\s+keyboard\s+lip/i)
       end
 
-      def explode_nested_instances_once!(entities)
-        return if entities.nil?
-        entities.to_a.each do |e|
-          next unless e.valid? && e.is_a?(Sketchup::ComponentInstance)
-          iname = e.name.to_s
-          dname = e.definition.name.to_s
-          # Explode lip/top/wrap parts; leave posts/feet alone when possible.
-          next unless table_graphic_name?(iname, dname) ||
-                      iname =~ /keyboard\s*(lip|top|base)/i ||
-                      dname =~ /keyboard\s*(lip|top|base)/i ||
-                      dname =~ /attachment\s*wrap/i
+      # Erase v0.1.56 zero-thickness flat TableGraphicHint planes (top-level bake).
+      def purge_synthetic_table_graphic_panels!(defn)
+        return 0 unless defn && defn.valid?
+        removed = 0
+        defn.entities.to_a.each do |e|
+          next unless e.valid?
+          next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+          next unless synthetic_table_graphic?(e)
           begin
-            e.explode
+            e.erase!
+            removed += 1
           rescue StandardError
             nil
           end
         end
+        removed
       end
 
-      # Build a paintable vertical face group from the baked table bounds.
-      def synthesize_table_graphic_panel!(defn, stable_name)
-        bb = defn.bounds
-        return nil if bb.nil? || bb.empty?
-        min = bb.min
-        max = bb.max
-        # Front apron: near max Y (graphic +Y), spanning X, mid-height band.
-        y = max.y
-        z0 = min.z + (max.z - min.z) * 0.15
-        z1 = min.z + (max.z - min.z) * 0.85
-        x0 = min.x
-        x1 = max.x
-        return nil if (x1 - x0).abs < 1e-6 || (z1 - z0).abs < 1e-6
+      def synthetic_table_graphic?(ent)
+        return false unless ent && ent.valid?
+        return true if marked_synthetic?(ent)
+        return false unless ent.is_a?(Sketchup::Group) || ent.is_a?(Sketchup::ComponentInstance)
+        iname = ent.name.to_s
+        dname = ent.respond_to?(:definition) ? ent.definition.name.to_s : ''
+        # Never treat real SKP lip/top/base as synthetic.
+        return false if lip_name?(iname, dname)
+        return false if iname =~ /keyboard\s*(top|base)/i || dname =~ /keyboard\s*(top|base)/i
+        return false if dname =~ /table\s*post|beam\s*straight|adjustable\s*foot|\b763\b/i
 
-        group = defn.entities.add_group
-        group.name = stable_name.to_s
-        face = group.entities.add_face(
-          Geom::Point3d.new(x0, y, z0),
-          Geom::Point3d.new(x1, y, z0),
-          Geom::Point3d.new(x1, y, z1),
-          Geom::Point3d.new(x0, y, z1)
-        )
-        # Face toward −Y (viewer) if SketchUp flipped it.
-        if face && face.valid? && face.normal.y > 0
-          face.reverse!
-        end
-        group
-      rescue StandardError => e
-        puts "[ISOframe] synthesize_table_graphic_panel! failed: #{e.message}"
-        nil
+        tagged = iname =~ /TableGraphicHint/i || dname =~ /TableGraphicHint/i
+        return false unless tagged || iname =~ /\ATableGraphicHint\z/i
+
+        # Zero-thickness / single-plane panel heuristic.
+        ents = ent.is_a?(Sketchup::Group) ? ent.entities : ent.definition.entities
+        faces = ents.grep(Sketchup::Face).select(&:valid?)
+        nested = ents.grep(Sketchup::Group).size + ents.grep(Sketchup::ComponentInstance).size
+        return false if nested > 0 && faces.size > 4
+
+        bb = ent.bounds
+        return false if bb.nil? || bb.empty?
+        dx = (bb.max.x - bb.min.x).abs
+        dy = (bb.max.y - bb.min.y).abs
+        dz = (bb.max.z - bb.min.z).abs
+        # ~0 thickness in one axis (< 2 mm) and large in the other two → synthetic plane.
+        thin = [dx, dy, dz].min
+        return true if thin < 2.mm && faces.size <= 2
+        return true if faces.size == 1 && nested == 0
+        false
+      rescue StandardError
+        false
+      end
+
+      def marked_synthetic?(ent)
+        return false unless ent.respond_to?(:get_attribute)
+        ent.get_attribute('ISOframe', KEY_SYNTHETIC_TABLE_GRAPHIC) == true ||
+          ent.get_attribute('ISOframe_StandDesigner', KEY_SYNTHETIC_TABLE_GRAPHIC) == true
+      rescue StandardError
+        false
       end
 
       def collect_named_groups!(entities, pattern, out, depth)
