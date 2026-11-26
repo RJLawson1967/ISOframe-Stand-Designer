@@ -28,6 +28,9 @@
 # names (Groups lose "keyboard lip"). Do NOT explode the wrap (keep nested lip
 # ComponentInstance). Do NOT require a named graphic group at apply — paint
 # apron faces in place (lip if present, else non-post faces of the bake).
+# v0.1.59: apron-only + continuous UV. v0.1.58 painted ~146k faces (whole wrap /
+# character mesh) with per-face tiling and hit the 15mm tabletop edge. Paint only
+# keyboard-lip apron faces under the top; one developed UV across the curve.
 
 module ISOframe
   module StandDesigner
@@ -39,8 +42,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v57 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v58',
+          # Fresh name so dealers drop any cached v43–v58 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v59',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -52,6 +55,8 @@ module ISOframe
       #   closer to module = −Y; viewer left = +X.
       PLACE_CLOSER_MM = 19.5
       PLACE_LEFT_MM = 19.6
+      # Tabletop thickness (Richard) — apron is under this; edge faces ~this tall.
+      TABLETOP_THICKNESS_MM = 15.0
       # Attribute on synthetic zero-thickness panels (v0.1.56 mistake) for purge.
       KEY_SYNTHETIC_TABLE_GRAPHIC = 'isoframe_synthetic_table_graphic'
 
@@ -939,7 +944,8 @@ module ISOframe
             next unless e.valid?
             iname = e.name.to_s
             dname = e.respond_to?(:definition) ? e.definition.name.to_s : ''
-            if lip_name?(iname, dname) || table_graphic_name?(iname, dname)
+            # Mark lip only — never the wrap (wrap contains character + whole table).
+            if lip_name?(iname, dname) && !wrap_container?(iname, dname)
               mark_as_table_graphic!(e)
             end
             if e.is_a?(Sketchup::Group)
@@ -1061,7 +1067,10 @@ module ISOframe
           next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
           next unless e.valid?
           next if synthetic_table_graphic?(e)
-          return e if table_graphic_marked?(e)
+          iname = e.name.to_s
+          dname = e.respond_to?(:definition) ? e.definition.name.to_s : ''
+          next if wrap_container?(iname, dname)
+          return e if table_graphic_marked?(e) && lip_name?(iname, dname)
           nested = if e.is_a?(Sketchup::Group)
                      find_marked_table_graphic(e.entities, depth + 1)
                    else
@@ -1072,44 +1081,93 @@ module ISOframe
         nil
       end
 
-      # True if baked def has any paintable apron faces (for tests / diagnostics).
-      def baked_table_has_apron_faces?(defn)
-        return false unless defn && defn.valid?
-        !collect_apron_faces_from_definition(defn).empty?
-      end
+      # Apron faces for artwork: ONLY inside keyboard lip, under the 15mm top.
+      def select_keyboard_apron_faces(defn)
+        return [] unless defn && defn.valid?
+        lip = find_keyboard_lip_entity(defn.entities, 0)
+        return [] unless lip && lip.valid?
 
-      def collect_apron_faces_from_definition(defn)
         faces = []
-        collect_apron_faces!(defn.entities, faces, 0, '')
-        faces
-      end
+        gather_faces_deep!(lip, faces, 0)
+        return [] if faces.empty?
 
-      def collect_apron_faces!(entities, out, depth, parent_key)
-        return if entities.nil? || depth > 8
-        entities.each do |e|
-          if e.is_a?(Sketchup::Face) && e.valid?
-            next if skip_container_for_apron?(parent_key)
-            n = e.normal
-            next if n.z.abs >= 0.92
-            begin
-              next if (e.area.to_f * 25.4 * 25.4) < 20.0
-            rescue StandardError
-              next
-            end
-            out << e
-          elsif e.is_a?(Sketchup::Group) && e.valid?
-            key = "#{parent_key} #{e.name}"
-            collect_apron_faces!(e.entities, out, depth + 1, key)
-          elsif e.is_a?(Sketchup::ComponentInstance) && e.valid?
-            key = "#{parent_key} #{e.name} #{e.definition.name}"
-            collect_apron_faces!(e.definition.entities, out, depth + 1, key)
+        zs = []
+        faces.each do |f|
+          f.outer_loop.vertices.each { |v| zs << v.position.z.to_f }
+        rescue StandardError
+          nil
+        end
+        return [] if zs.empty?
+        z_min = zs.min
+        z_max = zs.max
+        top_cut = z_max - TABLETOP_THICKNESS_MM.mm
+        edge_max_h = (TABLETOP_THICKNESS_MM + 2.0).mm
+
+        faces.select do |f|
+          next false unless f.valid?
+          n = f.normal
+          # Exclude tabletop top/bottom (near-horizontal).
+          next false if n.z.abs >= 0.50
+          begin
+            vz = f.outer_loop.vertices.map { |v| v.position.z.to_f }
+            next false if vz.empty?
+            f_zmin = vz.min
+            f_zmax = vz.max
+            span = f_zmax - f_zmin
+            # Exclude ~15mm-tall tabletop edge strip.
+            next false if span <= edge_max_h + 1e-6
+            # Apron lives under the tabletop band.
+            next false if f_zmin >= top_cut - 1e-6
+            # Keep meaningful facets (not dust).
+            next false if (f.area.to_f * 25.4 * 25.4) < 50.0
+            true
+          rescue StandardError
+            false
           end
         end
       end
 
+      def gather_faces_deep!(entity_or_entities, out, depth)
+        return if depth > 8
+        ents = if entity_or_entities.is_a?(Sketchup::Group)
+                 entity_or_entities.entities
+               elsif entity_or_entities.is_a?(Sketchup::ComponentInstance)
+                 entity_or_entities.definition.entities
+               elsif entity_or_entities.respond_to?(:grep)
+                 entity_or_entities
+               elsif entity_or_entities.respond_to?(:entities)
+                 entity_or_entities.entities
+               end
+        return if ents.nil?
+        ents.each do |e|
+          if e.is_a?(Sketchup::Face) && e.valid?
+            out << e
+          elsif e.is_a?(Sketchup::Group) && e.valid?
+            gather_faces_deep!(e, out, depth + 1)
+          elsif e.is_a?(Sketchup::ComponentInstance) && e.valid?
+            gather_faces_deep!(e, out, depth + 1)
+          end
+        end
+      end
+
+      # Legacy name used by older artwork — now lip-apron only (not whole wrap).
+      def collect_apron_faces_from_definition(defn)
+        select_keyboard_apron_faces(defn)
+      end
+
+      def baked_table_has_apron_faces?(defn)
+        !select_keyboard_apron_faces(defn).empty?
+      end
+
       def skip_container_for_apron?(key)
         k = key.to_s
-        !!(k =~ /table\s*post|\b763\b|beam\s*straight|adjustable\s*foot|base\s*support|flexibeam|post\s*[ab]\b/i)
+        !!(k =~ /table\s*post|\b763\b|beam\s*straight|adjustable\s*foot|base\s*support|flexibeam|post\s*[ab]\b|sree|keyboard\s*top|attachment\s*wrap/i)
+      end
+
+      # Never treat the wrap itself as the paint target (would include character mesh).
+      def wrap_container?(iname, dname)
+        n = "#{iname} #{dname}"
+        !!(n =~ /attachment\s*wrap/i || n =~ /Keyboard Attachment wrap/i)
       end
 
       # Walk baked table for "keyboard lip" / Table Attachment Keyboard Lip.

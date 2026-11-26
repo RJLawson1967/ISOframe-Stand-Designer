@@ -9,6 +9,9 @@
 # v0.1.36: Image load copies to a temp path without spaces; `.jpeg` → `.jpg` temp
 # so Desktop folders like "ISOframe Stand Designer" never break ImageRep.
 # Pure math helpers bay_u_window / bay_pixel_window are unit-tested without SketchUp.
+# v0.1.59: wall wallpaper FRONT faces only (rear toward flex-link unpainted).
+# Keyboard apron: lip-only faces under 15mm top + continuous cylindrical UV
+# (fixes ~146k per-face tiling).
 
 module ISOframe
   module StandDesigner
@@ -273,70 +276,86 @@ module ISOframe
           nil
         end
 
-        # v0.1.58: never require a named "under-table graphic group".
-        # Prefer SKP keyboard lip when present; always fall back to painting
-        # real apron faces on the baked table (skip posts/feet). No synthetic plane.
+        # v0.1.59: lip apron only + one continuous UV (not ~146k tiled faces).
         Tables.purge_synthetic_table_graphic_panels!(defn)
-        target = Tables.ensure_table_graphic_group!(defn, 'TableGraphicHint')
-        if target && Tables.synthetic_table_graphic?(target)
-          target = nil
+        lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
+        apron = Tables.select_keyboard_apron_faces(defn)
+        if apron.empty?
+          raise 'No under-table apron faces found on the keyboard lip. ' \
+                'Toggle Keyboard Table off/on once, then try Apply Table Artwork again.'
+        end
+        if apron.size > 8000
+          raise "Apron face filter too broad (#{apron.size} faces). " \
+                'Expected lip apron only — report to support.'
         end
 
         mid = Attributes.get(table_inst, Constants::KEY_TABLE_HOST, 'table').to_s
-        mat = ensure_table_material!(table_inst.model, mid, image_path)
-
-        painted = 0
-        if target && target.valid?
-          painted = map_table_lip_faces!(target, mat)
-          painted = map_table_graphic_group!(target, mat) if painted <= 0
-        end
-        # Face fallback — works even when lip name was lost after older bakes.
+        source = load_source_rep!(image_path)
+        mat = ensure_table_apron_material!(table_inst.model, mid, image_path, source, apron)
+        painted = paint_apron_continuous!(apron, mat)
         if painted <= 0
-          painted = map_table_apron_faces_from_definition!(defn, mat)
+          raise 'Could not UV-map the under-table apron. Try another image, or toggle the table off/on.'
         end
-        if painted <= 0
-          raise 'No under-table graphic faces found to paint on the keyboard table. ' \
-                'Try Keyboard Table off/on once, then Apply Table Artwork again.'
-        end
+        puts "[ISOframe] Table apron painted faces=#{painted} lip=#{lip ? lip.name : 'nil'}"
         painted
       end
 
-      # Paint curved apron faces inside the SKP keyboard lip (small facets OK).
-      def map_table_lip_faces!(lip, material)
-        faces = collect_faces_deep(lip, 0)
-        apron = faces.select do |f|
-          next false unless f.valid?
-          n = f.normal
-          next false if n.z.abs >= 0.92
-          face_area_mm2(f) >= 20.0
+      # Texture sized to the developed apron (one image across the curve).
+      def ensure_table_apron_material!(model, table_key, image_path, source, apron_faces)
+        name = "ISOframe Table Artwork #{table_key}"
+        mat = model.materials[name] || model.materials.add(name)
+        load_path = source.is_a?(Hash) ? source[:path] : nil
+        load_path = safe_image_load_path(normalize_image_path(image_path)) if load_path.nil? || !File.file?(load_path.to_s)
+        begin
+          mat.texture = load_path
+        rescue StandardError
+          mat.texture = image_path
         end
-        paint_apron_faces!(apron, material)
+        raise 'SketchUp could not load under-table texture' if mat.texture.nil?
+
+        width_mm, height_mm = apron_developed_size_mm(apron_faces, source)
+        set_texture_size!(mat, width_mm, height_mm)
+        mat
       end
 
-      # Paint non-horizontal faces from the whole baked table, skipping posts/feet.
-      def map_table_apron_faces_from_definition!(defn, material)
-        faces = Tables.collect_apron_faces_from_definition(defn)
-        paint_apron_faces!(faces, material)
+      def apron_developed_size_mm(faces, source)
+        frame = apron_uv_frame(faces)
+        w_mm = frame[:arc_len].to_f / 1.mm
+        h_mm = frame[:height].to_f / 1.mm
+        w_mm = Constants::GRAPHIC_BAY_MM if w_mm < 10.0
+        h_mm = 300.0 if h_mm < 10.0
+        begin
+          rep = source.is_a?(Hash) ? source[:rep] : nil
+          if rep && rep.width.to_i > 0 && rep.height.to_i > 0
+            # Keep image aspect: height from width × aspect (cover apron width).
+            aspect = rep.height.to_f / rep.width.to_f
+            h_from_aspect = w_mm * aspect
+            # Prefer fitting the taller of developed apron height vs aspect height.
+            h_mm = [h_mm, h_from_aspect].max
+          end
+        rescue StandardError
+          nil
+        end
+        [w_mm, h_mm]
       end
 
-      def paint_apron_faces!(faces, material)
+      # Continuous cylindrical unwrap: U = angle around apron center, V = Z.
+      def paint_apron_continuous!(faces, material)
         return 0 if faces.nil? || faces.empty?
-        bay_w = Constants::GRAPHIC_BAY_MM.mm
-        tex_w, _tex_h = texture_dims(material, bay_w, 1000.mm)
+        frame = apron_uv_frame(faces)
+        tex_w, tex_h = texture_dims(material, frame[:arc_len], frame[:height])
         painted = 0
         faces.each do |face|
           begin
             next unless face.valid?
+            verts = face.outer_loop.vertices.map(&:position)
+            next if verts.size < 3
             face.material = material
             face.back_material = material
-            verts = face.outer_loop.vertices.map(&:position)
-            if verts.size >= 2
-              a = verts.min_by(&:x)
-              b = verts.max_by(&:x)
-              uv_a = Geom::Point3d.new(0, a.z, 0)
-              uv_b = Geom::Point3d.new(tex_w, b.z, 0)
+            mapping = apron_uv_mapping(verts, frame, tex_w, tex_h)
+            if mapping
               begin
-                face.position_material(material, [a, uv_a, b, uv_b], true)
+                face.position_material(material, mapping, true)
               rescue StandardError
                 nil
               end
@@ -349,11 +368,127 @@ module ISOframe
         painted
       end
 
+      def apron_uv_frame(faces)
+        pts = []
+        faces.each do |f|
+          f.outer_loop.vertices.each { |v| pts << v.position }
+        rescue StandardError
+          nil
+        end
+        raise 'No apron vertices for UV' if pts.empty?
+
+        cx = pts.map(&:x).inject(0.0, :+) / pts.size
+        cy = pts.map(&:y).inject(0.0, :+) / pts.size
+        zs = pts.map { |p| p.z.to_f }
+        z0 = zs.min
+        z1 = zs.max
+        height = [z1 - z0, 1.0.mm].max
+
+        angles = pts.map { |p| Math.atan2(p.y - cy, p.x - cx) }
+        # Unwrap angles onto a continuous interval covering the apron arc.
+        a_sorted = angles.sort
+        # Use min..max span; for D-counter facing +Y, angles cluster around π/2.
+        a0 = a_sorted.first
+        a1 = a_sorted.last
+        span = a1 - a0
+        if span < 1e-6
+          span = 2.0 * Math::PI
+          a0 = -Math::PI
+          a1 = Math::PI
+        end
+        # Mean radius for developed width.
+        radii = pts.map { |p| Math.hypot(p.x - cx, p.y - cy) }
+        r = radii.inject(0.0, :+) / radii.size
+        r = 100.mm if r < 1.mm
+        arc_len = r * span.abs
+
+        {
+          cx: cx, cy: cy, z0: z0, z1: z1,
+          a0: a0, a1: a1, span: span,
+          radius: r, arc_len: arc_len, height: height
+        }
+      end
+
+      def apron_uv_mapping(verts, frame, tex_w, tex_h)
+        # Pick 3 verts with good spread in (angle, z) for position_material.
+        scored = verts.map do |p|
+          ang = Math.atan2(p.y - frame[:cy], p.x - frame[:cx])
+          [p, ang, p.z.to_f]
+        end
+        return nil if scored.size < 3
+        # Prefer extreme U and V samples.
+        a = scored.min_by { |(_, ang, _)| ang }
+        b = scored.max_by { |(_, ang, _)| ang }
+        c = scored.max_by { |(_, _, z)| (z - frame[:z0]).abs }
+        trio = [a, b, c].uniq { |t| t[0] }
+        return nil if trio.size < 2
+
+        mapping = []
+        trio.first(3).each do |p, ang, z|
+          u = apron_u(ang, frame, tex_w)
+          v = apron_v(z, frame, tex_h)
+          mapping << p
+          mapping << Geom::Point3d.new(u, v, 0)
+        end
+        mapping.size >= 4 ? mapping : nil
+      end
+
+      def apron_u(ang, frame, tex_w)
+        span = frame[:span]
+        return 0.0 if span.abs < 1e-9
+        frac = (ang - frame[:a0]) / span
+        frac = 0.0 if frac < 0.0
+        frac = 1.0 if frac > 1.0
+        frac * tex_w
+      end
+
+      def apron_v(z, frame, tex_h)
+        h = frame[:height]
+        return 0.0 if h < 1e-9
+        frac = (z.to_f - frame[:z0]) / h
+        frac = 0.0 if frac < 0.0
+        frac = 1.0 if frac > 1.0
+        frac * tex_h
+      end
+
+      # Kept for older call sites / reapply — redirects to apron-only continuous paint.
+      def map_table_lip_faces!(lip, material)
+        return 0 unless lip && lip.valid?
+        # Build a temporary def-like selection from lip only.
+        faces = []
+        Tables.gather_faces_deep!(lip, faces, 0)
+        # Re-filter with tabletop rules using lip Z range.
+        zs = []
+        faces.each do |f|
+          f.outer_loop.vertices.each { |v| zs << v.position.z.to_f }
+        rescue StandardError
+          nil
+        end
+        return 0 if zs.empty?
+        z_max = zs.max
+        top_cut = z_max - Tables::TABLETOP_THICKNESS_MM.mm
+        edge_max_h = (Tables::TABLETOP_THICKNESS_MM + 2.0).mm
+        apron = faces.select do |f|
+          next false unless f.valid?
+          next false if f.normal.z.abs >= 0.50
+          vz = f.outer_loop.vertices.map { |v| v.position.z.to_f }
+          span = vz.max - vz.min
+          next false if span <= edge_max_h + 1e-6
+          next false if vz.min >= top_cut - 1e-6
+          face_area_mm2(f) >= 50.0
+        end
+        paint_apron_continuous!(apron, material)
+      end
+
+      def map_table_apron_faces_from_definition!(defn, material)
+        paint_apron_continuous!(Tables.select_keyboard_apron_faces(defn), material)
+      end
+
       def ensure_table_material!(model, table_key, image_path)
+        # Compatibility wrapper — size is corrected in ensure_table_apron_material!.
         name = "ISOframe Table Artwork #{table_key}"
         mat = model.materials[name] || model.materials.add(name)
         source = load_source_rep!(image_path)
-        # Full image on the under-table panel (not wall bay crop / wallpaper).
         load_path = source.is_a?(Hash) ? source[:path] : nil
         load_path = safe_image_load_path(normalize_image_path(image_path)) if load_path.nil? || !File.file?(load_path.to_s)
         begin
@@ -362,18 +497,7 @@ module ISOframe
           mat.texture = image_path
         end
         raise 'SketchUp could not load under-table texture' if mat.texture.nil?
-
-        bay_w_mm = Constants::GRAPHIC_BAY_MM
-        height_mm = 1000.0
-        begin
-          rep = source.is_a?(Hash) ? source[:rep] : nil
-          if rep && rep.width.to_i > 0 && rep.height.to_i > 0
-            height_mm = bay_w_mm * (rep.height.to_f / rep.width.to_f)
-          end
-        rescue StandardError
-          height_mm = 1000.0
-        end
-        set_texture_size!(mat, bay_w_mm, height_mm)
+        set_texture_size!(mat, Constants::GRAPHIC_BAY_MM, 400.0)
         mat
       end
 
@@ -678,22 +802,22 @@ module ISOframe
         end
       end
 
-      # Paint front facets. Material texture is already the bay crop, so U runs
-      # 0→bay_w within this bay (slice of the wall). Path frac still drives U
-      # along the bay for curved panels when position_material works.
+      # Paint FRONT facets only (outward toward floorspace). Rear faces toward
+      # the framework / flex-link stay unpainted (v0.1.59).
       def map_graphic_group!(group, material, bay_index, bay_count, height_mm, flex_angle_deg = 0.0)
         faces = group.entities.grep(Sketchup::Face).select { |f| f.valid? }
-        front = select_front_panel_faces(faces)
+        path = bay_front_path(flex_angle_deg)
+        front = select_front_panel_faces(faces, path)
         return 0 if front.empty?
+
+        # Clear wallpaper from rear/side faces so old double-sided paint is gone.
+        clear_non_front_wall_materials!(faces, front)
 
         bay_w = Constants::GRAPHIC_BAY_MM.mm
         tex_w, tex_h = texture_dims(material, bay_w, height_mm.to_f.mm)
-        # Cropped material: this bay owns the full texture → U window 0→tex_w.
-        # (Strip math for tests still uses bay_u_window on the *source* image.)
         u0 = 0.0
         u1 = tex_w
         h = tex_h
-        path = bay_front_path(flex_angle_deg)
         cum = path_cumulative_lengths(path)
         total = cum.empty? ? 0.0 : cum.last
         total = bay_w if total < 1e-9
@@ -784,12 +908,70 @@ module ISOframe
         Geom::Point3d.new(u, v, 0)
       end
 
-      def select_front_panel_faces(faces)
+      # Front = outward toward viewer/floorspace (left-normal of bay path).
+      # Rear slab faces (≈ opposite normal, toward flex-link) are excluded.
+      def select_front_panel_faces(faces, path = nil)
+        path ||= bay_front_path(0.0)
         faces.select do |f|
           next false unless f.valid?
           n = f.normal
           next false if n.z.abs >= 0.40
-          face_area_mm2(f) >= MIN_FRONT_AREA_MM2
+          next false if face_area_mm2(f) < MIN_FRONT_AREA_MM2
+          outward = front_outward_normal_at(f.bounds.center, path)
+          next false if outward.nil?
+          n.dot(outward) > 0.25
+        end
+      end
+
+      def front_outward_normal_at(point, path)
+        return Geom::Vector3d.new(0, 1, 0) if path.nil? || path.size < 2
+        # Nearest path segment → left normal (same as Geometry panel front).
+        best_i = 0
+        best_d2 = nil
+        (0...path.size - 1).each do |i|
+          a = path[i]
+          b = path[i + 1]
+          dx = b.x - a.x
+          dy = b.y - a.y
+          len2 = dx * dx + dy * dy
+          next if len2 < 1e-18
+          t = ((point.x - a.x) * dx + (point.y - a.y) * dy) / len2
+          t = 0.0 if t < 0.0
+          t = 1.0 if t > 1.0
+          qx = a.x + t * dx
+          qy = a.y + t * dy
+          d2 = (point.x - qx)**2 + (point.y - qy)**2
+          if best_d2.nil? || d2 < best_d2
+            best_d2 = d2
+            best_i = i
+          end
+        end
+        a = path[best_i]
+        b = path[[best_i + 1, path.size - 1].min]
+        tx = b.x - a.x
+        ty = b.y - a.y
+        len = Math.hypot(tx, ty)
+        return Geom::Vector3d.new(0, 1, 0) if len < 1e-9
+        # Left normal of tangent (tx,ty) = (-ty, tx) — matches Geometry.left_normal.
+        nx = -ty / len
+        ny = tx / len
+        Geom::Vector3d.new(nx, ny, 0)
+      rescue StandardError
+        Geom::Vector3d.new(0, 1, 0)
+      end
+
+      def clear_non_front_wall_materials!(all_faces, front_faces)
+        front_ids = {}
+        front_faces.each { |f| front_ids[f.entityID] = true if f.valid? }
+        all_faces.each do |f|
+          next unless f.valid?
+          next if front_ids[f.entityID]
+          begin
+            f.material = nil
+            f.back_material = nil
+          rescue StandardError
+            nil
+          end
         end
       end
 
@@ -801,7 +983,12 @@ module ISOframe
 
       def paint_front_face!(face, material, u0, u1, h, path, cum, total)
         face.material = material
-        face.back_material = material
+        # Do not paint the reverse side of the front face (into panel thickness).
+        begin
+          face.back_material = nil
+        rescue StandardError
+          nil
+        end
         verts = face.outer_loop.vertices.map(&:position)
         return material_only_ok?(face, material) if verts.size < 3
 
@@ -810,7 +997,7 @@ module ISOframe
       rescue StandardError
         begin
           face.material = material
-          face.back_material = material
+          face.back_material = nil
         rescue StandardError
           nil
         end
