@@ -38,6 +38,8 @@
 # v0.1.61: live apply still empty — lip-local normals / missing lip / no fallback.
 # Resolve lip with path transform into bake-root (Z-up); never return empty when
 # lip (or safe apron container) has faces; paint continuous UV; never whole wrap.
+# v0.1.62: v0.1.61 spilled onto tabletop top/edge and 37mm rear beams. Paint ONLY
+# keyboard lip apron; exclude every keyboard-top face and beams/posts/frame.
 
 module ISOframe
   module StandDesigner
@@ -49,8 +51,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v60 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v61',
+          # Fresh name so dealers drop any cached v43–v61 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v62',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -1089,70 +1091,136 @@ module ISOframe
       end
 
       # Apron faces for Apply Table Artwork (live bake path).
-      # Tabletop + 15mm edge live on separate "keyboard top" — never selected here.
-      # v0.1.61: resolve lip with bake-root transforms (orientation lives on wrap
-      # instance). Prefer non-horizontal in root Z-up; if that empties, keep ALL
-      # lip faces. Safe fallback skips wrap/character/posts/top — never 146k.
+      # v0.1.62: ONLY keyboard lip. Never tabletop (top/bottom/15mm edges) or
+      # 37mm beams/posts/frame. Continuous UV. No ALL-faces / rolable spill.
       def select_keyboard_apron_faces(defn)
         return [] unless defn && defn.valid?
         samples = apron_face_samples(defn)
         return [] if samples.empty?
 
-        vertical = samples.select do |s|
-          s[:face].valid? && s[:nz].abs < 0.85 && s[:area_mm2] >= 0.5
-        end
-        chosen = vertical
+        top_band = tabletop_z_band_mm(defn, samples)
+        chosen = samples.select { |s| apron_sample_allowed?(s, top_band) }
         if chosen.empty?
-          # Lip IS the apron — paint whatever faces it has (continuous UV).
-          chosen = samples.select { |s| s[:face].valid? && s[:area_mm2] >= 0.01 }
-          puts "[ISOframe] apron fallback ALL target faces count=#{chosen.size}"
+          # Looser vertical tilt, still never horizontal / top-band / edge strip.
+          chosen = samples.select { |s| apron_sample_allowed?(s, top_band, 0.92) }
+          puts "[ISOframe] apron loose-vertical count=#{chosen.size}"
         end
         if chosen.size > 8000
           chosen = chosen.sort_by { |s| -s[:area_mm2] }.first(2500)
           puts "[ISOframe] apron capped to #{chosen.size} largest faces"
         end
         faces = chosen.map { |s| s[:face] }
-        puts "[ISOframe] apron selected=#{faces.size} raw_samples=#{samples.size}"
+        puts "[ISOframe] apron selected=#{faces.size} raw_samples=#{samples.size} " \
+             "top_band_mm=#{top_band.inspect}"
         faces
       end
 
-      # Samples with bake-root normals (nz) for filtering + local face refs for UV.
+      # Keep vertical apron facets under the tabletop band; reject edge strips.
+      def apron_sample_allowed?(sample, top_band, nz_max = 0.85)
+        return false unless sample[:face] && sample[:face].valid?
+        return false if sample[:area_mm2].to_f < 0.5
+        # No tabletop top/bottom (near-horizontal in bake-root).
+        return false if sample[:nz].to_f.abs >= nz_max
+        zmin = sample[:z_min_mm].to_f
+        zmax = sample[:z_max_mm].to_f
+        zspan = sample[:z_span_mm].to_f
+        if top_band
+          # Any face that intersects the 15mm tabletop Z band is excluded
+          # (top surface, underside at top, and all edge faces).
+          return false if zmax >= top_band[:z_min] - 0.5 && zmin <= top_band[:z_max] + 0.5
+          # Short ~15mm vertical edge whose centroid sits in the top band.
+          edge_max = TABLETOP_THICKNESS_MM + 2.0
+          mid = (zmin + zmax) * 0.5
+          if zspan <= edge_max && mid >= top_band[:z_min] - 0.5 && mid <= top_band[:z_max] + 0.5
+            return false
+          end
+        end
+        true
+      end
+
+      # Samples with bake-root normals (nz) — lip only, never top/beams.
       def apron_face_samples(defn)
         target, tr = resolve_apron_target_with_transform(defn)
         samples = []
         id = identity_transform
         if target && target.valid?
-          gather_face_samples!(target, samples, 0, tr || id)
-          puts "[ISOframe] apron target raw faces=#{samples.size} " \
+          gather_face_samples!(target, samples, 0, tr || id, 'lip')
+          puts "[ISOframe] apron lip raw faces=#{samples.size} " \
                "name=#{target.name} def=#{target.respond_to?(:definition) ? target.definition.name : '-'}"
         else
-          puts '[ISOframe] select_keyboard_apron_faces: lip/apron target not found — safe walk'
+          puts '[ISOframe] select_keyboard_apron_faces: lip not found — lip-only safe walk'
         end
         if samples.empty?
           gather_safe_apron_samples!(defn.entities, samples, 0, id, '')
-          puts "[ISOframe] apron safe-walk faces=#{samples.size}"
+          puts "[ISOframe] apron safe-walk (lip path only) faces=#{samples.size}"
         end
+        enrich_sample_z_mm!(samples)
         samples
+      end
+
+      def enrich_sample_z_mm!(samples)
+        samples.each do |s|
+          pts = s[:points_root] || []
+          zs = pts.map { |p| p.z.to_f / 1.mm }
+          if zs.empty?
+            s[:z_min_mm] = 0.0
+            s[:z_max_mm] = 0.0
+            s[:z_span_mm] = 0.0
+          else
+            s[:z_min_mm] = zs.min
+            s[:z_max_mm] = zs.max
+            s[:z_span_mm] = zs.max - zs.min
+          end
+        end
+      end
+
+      # Z band of keyboard top in bake-root mm. Prefer real top component bounds.
+      def tabletop_z_band_mm(defn, samples)
+        id = identity_transform
+        top = find_keyboard_top_with_transform(defn.entities, 0, id)
+        if top && top[0]
+          begin
+            bb = top[0].bounds
+            tr = top[1] || id
+            corners = [
+              Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z),
+              Geom::Point3d.new(bb.max.x, bb.max.y, bb.max.z),
+              Geom::Point3d.new(bb.min.x, bb.min.y, bb.max.z),
+              Geom::Point3d.new(bb.max.x, bb.max.y, bb.min.z),
+              Geom::Point3d.new(bb.min.x, bb.max.y, bb.min.z),
+              Geom::Point3d.new(bb.max.x, bb.min.y, bb.max.z)
+            ]
+            zs = corners.map { |p| (tr * p).z.to_f / 1.mm }
+            return { z_min: zs.min, z_max: zs.max } if zs.any?
+          rescue StandardError
+            nil
+          end
+        end
+        return nil if samples.nil? || samples.empty?
+        # Last resort: treat the highest 15mm of lip samples as forbidden band
+        # (lip sits under the top — its own max is usually below the top).
+        all_zmax = samples.map { |s| s[:z_max_mm].to_f }.max
+        { z_min: all_zmax - TABLETOP_THICKNESS_MM, z_max: all_zmax + TABLETOP_THICKNESS_MM }
+      rescue StandardError
+        nil
       end
 
       def identity_transform
         @identity_transform ||= Geom::Transformation.new
       end
 
+      # Lip only — never rolable/wrap/top (those spilled artwork in v0.1.61).
       def resolve_apron_target_with_transform(defn)
         id = identity_transform
         hit = find_keyboard_lip_with_transform(defn.entities, 0, id)
         return hit if hit && hit[0]
 
         marked = find_marked_table_graphic(defn.entities, 0)
-        if marked && marked.valid? && !wrap_container?(marked.name.to_s, def_name_of(marked))
+        if marked && marked.valid? && lip_name?(marked.name.to_s, def_name_of(marked)) &&
+           !wrap_container?(marked.name.to_s, def_name_of(marked))
           tr = find_entity_transform(defn.entities, marked, 0, id)
           return [marked, tr || id]
         end
-
-        # Nested "Graphic Keyboard Attachment (Rolable)" child — not the wrap itself.
-        hit = find_apron_like_nested(defn.entities, 0, id)
-        return hit if hit && hit[0]
 
         [nil, nil]
       end
@@ -1166,7 +1234,7 @@ module ISOframe
           iname = e.name.to_s
           dname = def_name_of(e)
           local = tr * e.transformation
-          if lip_name?(iname, dname) && !wrap_container?(iname, dname)
+          if lip_name?(iname, dname) && !wrap_container?(iname, dname) && !top_name?(iname, dname)
             return [e, local]
           end
           child_ents = e.is_a?(Sketchup::Group) ? e.entities : e.definition.entities
@@ -1176,7 +1244,7 @@ module ISOframe
         nil
       end
 
-      def find_apron_like_nested(entities, depth, tr)
+      def find_keyboard_top_with_transform(entities, depth, tr)
         return nil if entities.nil? || depth > 8
         entities.each do |e|
           next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
@@ -1184,21 +1252,19 @@ module ISOframe
           iname = e.name.to_s
           dname = def_name_of(e)
           local = tr * e.transformation
-          if apron_like_name?(iname, dname) && !wrap_container?(iname, dname)
+          if top_name?(iname, dname)
             return [e, local]
           end
           child_ents = e.is_a?(Sketchup::Group) ? e.entities : e.definition.entities
-          nested = find_apron_like_nested(child_ents, depth + 1, local)
+          nested = find_keyboard_top_with_transform(child_ents, depth + 1, local)
           return nested if nested
         end
         nil
       end
 
-      def apron_like_name?(iname, dname)
+      def top_name?(iname, dname)
         n = "#{iname} #{dname}"
-        return true if lip_name?(iname, dname)
-        # Nested DC graphic title — only when not the wrap container.
-        !!(n =~ /graphic\s*keyboard\s*attachment/i || n =~ /\brolable\b/i)
+        !!(n =~ /keyboard\s*top/i || n =~ /table\s*attachment\s*keyboard\s*top/i)
       end
 
       def find_entity_transform(entities, target, depth, tr)
@@ -1215,12 +1281,13 @@ module ISOframe
         nil
       end
 
-      def gather_face_samples!(entity_or_entities, out, depth, tr)
+      def gather_face_samples!(entity_or_entities, out, depth, tr, parent_key = 'lip')
         return if depth > 8
         ents = entities_of(entity_or_entities)
         return if ents.nil?
         ents.each do |e|
           if e.is_a?(Sketchup::Face) && e.valid?
+            next if blocked_apron_descend?(parent_key)
             n = transform_as_normal(e.normal, tr)
             out << {
               face: e,
@@ -1229,24 +1296,28 @@ module ISOframe
               points_root: e.outer_loop.vertices.map { |v| tr * v.position }
             }
           elsif e.is_a?(Sketchup::Group) && e.valid?
-            gather_face_samples!(e, out, depth + 1, tr * e.transformation)
+            key = "#{parent_key} #{e.name}"
+            next if blocked_apron_descend?(key)
+            gather_face_samples!(e, out, depth + 1, tr * e.transformation, key)
           elsif e.is_a?(Sketchup::ComponentInstance) && e.valid?
-            gather_face_samples!(e, out, depth + 1, tr * e.transformation)
+            key = "#{parent_key} #{e.name} #{e.definition.name}"
+            next if blocked_apron_descend?(key)
+            gather_face_samples!(e, out, depth + 1, tr * e.transformation, key)
           end
         end
       end
 
-      # Walk bake: always descend into wrap; skip posts/feet/character/top/base.
-      # Skip faces whose parent path is wrap without lip (character mesh).
+      # Walk bake: only keep faces under a keyboard-lip path; skip top/beams/posts.
       def gather_safe_apron_samples!(entities, out, depth, tr, parent_key)
         return if entities.nil? || depth > 8
         entities.each do |e|
           if e.is_a?(Sketchup::Face) && e.valid?
+            next unless parent_key =~ /keyboard\s*lip/i
             next if skip_apron_face_parent?(parent_key)
             n = transform_as_normal(e.normal, tr)
-            next if n.z.abs >= 0.92
+            next if n.z.abs >= 0.85
             area = face_area_mm2_local(e)
-            next if area < 1.0
+            next if area < 0.5
             out << {
               face: e,
               nx: n.x.to_f, ny: n.y.to_f, nz: n.z.to_f,
@@ -1266,14 +1337,16 @@ module ISOframe
         out.replace(out.sort_by { |s| -s[:area_mm2] }.first(2500)) if out.size > 8000
       end
 
+      # Do not descend into tabletop, beams, posts, feet, character, base.
       def blocked_apron_descend?(key)
         k = key.to_s
-        !!(k =~ /table\s*post|\b763\b|beam\s*straight|adjustable\s*foot|base\s*support|flexibeam|post\s*[ab]\b|\bsree\b|keyboard\s*top|keyboard\s*base/i)
+        !!(k =~ /table\s*post|\b763\b|beam\s*straight|\bbeam\b|\b37\s*mm\b|square\s*profile|t-?box|adjustable\s*foot|base\s*support|flexibeam|post\s*[ab]\b|\bsree\b|keyboard\s*top|keyboard\s*base|table\s*attachment\s*keyboard\s*top/i)
       end
 
       def skip_apron_face_parent?(key)
         return true if blocked_apron_descend?(key)
         k = key.to_s
+        return true unless k =~ /keyboard\s*lip/i
         # Character / loose wrap faces: under wrap but not under lip.
         if k =~ /attachment\s*wrap|ISOframe Keyboard Attachment/i && k !~ /keyboard\s*lip/i
           return true
@@ -1403,7 +1476,7 @@ module ISOframe
         end
       end
 
-      # Simulate v0.1.61: vertical-or-all under a lip target (never empty if faces exist).
+      # Simulate v0.1.61: vertical-or-all (spilled onto top/beams — kept for contrast).
       def count_apron_samples_passing_v61(samples)
         return 0 if samples.empty?
         vertical = samples.count { |s| s[:nz].to_f.abs < 0.85 && s[:area_mm2].to_f >= 0.5 }
@@ -1411,9 +1484,30 @@ module ISOframe
         samples.count { |s| s[:area_mm2].to_f >= 0.01 }
       end
 
+      # v0.1.62: vertical under lip, exclude tabletop band + short edge strips.
+      # samples may include :z_min_mm/:z_max_mm/:z_span_mm and optional top_band.
+      def count_apron_samples_passing_v62(samples, top_band = nil)
+        return 0 if samples.empty?
+        if top_band.nil?
+          zmax = samples.map { |s| s[:z_max_mm].to_f }.max
+          top_band = { z_min: zmax - TABLETOP_THICKNESS_MM, z_max: zmax }
+        end
+        samples.count do |s|
+          next false if s[:nz].to_f.abs >= 0.85
+          next false if s[:area_mm2].to_f < 0.5
+          zmin = s[:z_min_mm].to_f
+          zmax = s[:z_max_mm].to_f
+          zspan = s.fetch(:z_span_mm) { zmax - zmin }.to_f
+          next false if zmax >= top_band[:z_min] - 0.5 && zmin <= top_band[:z_max] + 0.5
+          edge_max = TABLETOP_THICKNESS_MM + 2.0
+          mid = (zmin + zmax) * 0.5
+          next false if zspan <= edge_max && mid >= top_band[:z_min] - 0.5 && mid <= top_band[:z_max] + 0.5
+          true
+        end
+      end
+
       def skip_container_for_apron?(key)
-        k = key.to_s
-        !!(k =~ /table\s*post|\b763\b|beam\s*straight|adjustable\s*foot|base\s*support|flexibeam|post\s*[ab]\b|sree|keyboard\s*top|keyboard\s*base|attachment\s*wrap/i)
+        blocked_apron_descend?(key) || !!(key.to_s =~ /attachment\s*wrap/i)
       end
 
       # Never treat the wrap itself as the paint target (would include character mesh).

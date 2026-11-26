@@ -18,6 +18,7 @@
 # Wall — restore v0.1.58 texture/UV paint path; clear rear faces after (front
 # photo, rear plain). v0.1.59 outward-only + back_material=nil caused solid
 # light-blue both sides.
+# v0.1.62: table apron lip-only — exclude tabletop (all faces) and 37mm beams.
 
 module ISOframe
   module StandDesigner
@@ -282,7 +283,7 @@ module ISOframe
           nil
         end
 
-        # v0.1.61: lip/apron via bake-root transform; continuous UV; never wrap/146k.
+        # v0.1.62: lip apron only (no tabletop / beams); continuous UV; never wrap.
         Tables.purge_synthetic_table_graphic_panels!(defn)
         Tables.mark_table_graphic_targets!(defn)
         lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
@@ -290,7 +291,7 @@ module ISOframe
         if apron.empty?
           dump = Tables.dump_baked_entity_names(defn.entities, 0)
           raise 'No under-table apron faces found on the keyboard lip. ' \
-                'Toggle Keyboard Table off/on once (v61 bake), then try again. ' \
+                'Toggle Keyboard Table off/on once (v62 bake), then try again. ' \
                 "lip=#{lip ? lip.name : 'NONE'} bake=#{dump}"
         end
         if apron.size > 8000
