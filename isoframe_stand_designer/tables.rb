@@ -59,6 +59,9 @@
 # and instance it under the top (apron front) on place + apply.
 # v0.1.69: wrap SKP must ship inside plugin models/; resolve via __FILE__ next to
 # tables.rb with logged fallbacks — v0.1.68 zip omitted the SKP so instance failed.
+# v0.1.70: after load, dump ALL definition names; match broadly (DC truncates at ^
+# to "Keyboard Attachment wrap", plus GraphicHint / keyboard attachment / Rolable).
+# Place must always succeed — geometry/root fallback if name match fails.
 
 module ISOframe
   module StandDesigner
@@ -70,8 +73,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v68 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v69',
+          # Fresh name so dealers drop any cached v43–v69 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v70',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -79,11 +82,30 @@ module ISOframe
 
       # Dedicated graphic-wrap SKP (Richard 2026-11-26) — paint surface for table artwork.
       SKP_GRAPHIC_WRAP = 'Keyboard_table_graphic_wrap.skp'
+      # Broad match — SketchUp DC often exposes only the part before ^
+      # ("Keyboard Attachment wrap"), not the full "...Graphic Keyboard...(Rolable)".
+      # Real names dumped from Keyboard_table_graphic_wrap.skp (model.dat):
+      #   Keyboard Attachment wrap^Keyboard table attachment_Graphic Keyboard Attachment (Rolable)
+      #   GraphicHint
+      #   keyboard attachment
       GRAPHIC_WRAP_RE = /
-        graphic\s*keyboard\s*attachment|
-        keyboard\s*table\s*attachment_graphic\s*keyboard|
-        graphic\s*keyboard.*rolable|
-        rolable
+        graphic\s*keyboard|
+        keyboard\s*table\s*attachment_graphic|
+        graphic\s*hint|
+        \bgraphichint\b|
+        rolab(?:le|ble)|
+        keyboard\s*attachment\s*wrap|
+        attachment\s*wrap|
+        \bkeyboard\s*attachment\b
+      /ix
+      # Structural / non-paint defs inside the wrap SKP — never pick these.
+      GRAPHIC_WRAP_EXCLUDE_RE = /
+        \Aboss-extrude|\Acut-extrude|\Afillet|\Aextrude-thin|
+        keyboard\s*lip|keyboard\s*top|keyboard\s*base|
+        table\s*post|beam\s*straight|adjustable\s*foot|
+        floorspace|flood\s*light|wave\s*starter|wave\s*extension|
+        flexibeam|basesupport|postnew|\bpost[ab]\b|
+        \bsree\b|led\s*flood|t-box
       /ix
 
       # Geometry thresholds for nameless SolidWorks feature parts (mm).
@@ -749,24 +771,25 @@ module ISOframe
 
       INSTANCED_WRAP_NAME = 'ISOframe Graphic Keyboard Wrap'
 
-      # Definition/instance is the paint wrap if it names Graphic Keyboard Attachment
-      # / Rolable. DC names like "Keyboard Attachment wrap^…Graphic Keyboard…"
-      # MUST match — do not let wrap_container? veto those.
+      # Broad paint-wrap name match (v0.1.70). DC may truncate at ^ so the live
+      # def name is only "Keyboard Attachment wrap" — still a hit.
       def graphic_wrap_definition_name?(name)
         n = name.to_s
-        return true if n =~ /graphic\s*keyboard\s*attachment/i
-        return true if n =~ /rolable/i && n =~ /graphic|keyboard\s*attachment/i
+        return false if n.strip.empty?
+        return true if n == INSTANCED_WRAP_NAME
+        return false if n =~ GRAPHIC_WRAP_EXCLUDE_RE
+        return true if n =~ GRAPHIC_WRAP_RE
         false
       end
 
       def graphic_wrap_paint_name?(iname, dname)
         return true if graphic_wrap_definition_name?(iname) || graphic_wrap_definition_name?(dname)
         return true if iname.to_s == INSTANCED_WRAP_NAME
-        return false if wrap_container?(iname, dname)
         return false if lip_name?(iname, dname)
         return false if top_name?(iname, dname)
         n = "#{iname} #{dname}"
-        return false if n =~ /\bsree\b|table\s*post|\b763\b|beam|keyboard\s*base/i
+        return false if n =~ GRAPHIC_WRAP_EXCLUDE_RE
+        return false if n =~ /\bsree\b|table\s*post|\b763\b|beam/i
         false
       end
 
@@ -801,11 +824,30 @@ module ISOframe
         path = graphic_wrap_skp_path
         return path if path
         raise "#{SKP_GRAPHIC_WRAP} not found next to the plugin. " \
-              "Reinstall v0.1.69 zip (models/#{SKP_GRAPHIC_WRAP} must be present). " \
+              "Reinstall v0.1.70 zip (models/#{SKP_GRAPHIC_WRAP} must be present). " \
               "Tried:\n#{graphic_wrap_skp_candidates.join("\n")}"
       end
 
-      # Find Graphic Keyboard Attachment (Rolable) inside the table bake.
+      # Dump every ComponentDefinition name after wrap SKP load (Ruby Console).
+      def dump_model_definition_names!(model, tag)
+        rows = []
+        model.definitions.each do |d|
+          next unless d && d.valid?
+          next if d.respond_to?(:image?) && d.image?
+          ents = d.entities
+          faces = ents.grep(Sketchup::Face).size
+          nested = ents.grep(Sketchup::Group).size + ents.grep(Sketchup::ComponentInstance).size
+          hit = graphic_wrap_definition_name?(d.name)
+          rows << "#{d.name.inspect} faces=#{faces} nested=#{nested} wrap_match=#{hit}"
+        end
+        puts "[ISOframe] #{tag} definitions (#{rows.size}):\n  #{rows.join("\n  ")}"
+        rows
+      rescue StandardError => e
+        puts "[ISOframe] dump definitions failed: #{e.message}"
+        []
+      end
+
+      # Find Graphic Keyboard / GraphicHint / Attachment wrap inside the table bake.
       def find_graphic_wrap_with_transform(entities, depth, tr)
         return nil if entities.nil? || depth > 12
         entities.each do |e|
@@ -822,6 +864,38 @@ module ISOframe
         nil
       end
 
+      def score_wrap_definition(d)
+        n = d.name.to_s
+        return -1.0e9 if n =~ GRAPHIC_WRAP_EXCLUDE_RE
+        ents = d.entities
+        faces = ents.grep(Sketchup::Face).size
+        nested = ents.grep(Sketchup::Group).size + ents.grep(Sketchup::ComponentInstance).size
+        return -1.0e9 if faces.zero? && nested.zero?
+        score = 0.0
+        score += 80.0 if n =~ /rolab(?:le|ble)/i
+        score += 70.0 if n =~ /graphic\s*keyboard/i
+        score += 60.0 if n =~ /graphic\s*hint|\bgraphichint\b/i
+        score += 55.0 if n =~ /keyboard\s*attachment\s*wrap|attachment\s*wrap/i
+        score += 35.0 if n =~ /\bkeyboard\s*attachment\b/i
+        score += 25.0 if graphic_wrap_definition_name?(n)
+        score += [faces, 400].min * 0.05
+        score += nested * 0.4
+        begin
+          bb = d.bounds
+          unless bb.nil? || bb.empty?
+            dx = (bb.max.x - bb.min.x).abs / 1.mm
+            dy = (bb.max.y - bb.min.y).abs / 1.mm
+            dz = (bb.max.z - bb.min.z).abs / 1.mm
+            score += 20.0 if dz >= 40.0 && [dx, dy].min <= 100.0
+            score -= 40.0 if dx > 2500.0 || dy > 2500.0
+            score -= 20.0 if faces > 50_000 # character / huge mesh
+          end
+        rescue StandardError
+          nil
+        end
+        score
+      end
+
       # Best ComponentDefinition from loaded wrap SKP / model for paint geometry.
       def find_best_graphic_wrap_definition(model)
         best = nil
@@ -830,39 +904,64 @@ module ISOframe
           next unless d && d.valid?
           next if d.respond_to?(:image?) && d.image?
           n = d.name.to_s
-          next unless graphic_wrap_definition_name?(n) || n == INSTANCED_WRAP_NAME
-          next if n =~ /ISOframe Wave|Floorspace|LED Flood|Sree/i
-          # Must have some geometry (faces or nested).
-          ents = d.entities
-          faces = ents.grep(Sketchup::Face).size
-          nested = ents.grep(Sketchup::Group).size + ents.grep(Sketchup::ComponentInstance).size
-          next if faces.zero? && nested.zero?
-          score = 0.0
-          score += 50.0 if n =~ /rolable/i
-          score += 40.0 if n =~ /graphic\s*keyboard\s*attachment/i
-          score += 20.0 if n =~ /Keyboard Attachment wrap\^/i
-          score += [faces, 200].min * 0.1
-          score += nested * 0.5
-          # Prefer thinner vertical panel-like defs over huge assemblies.
-          begin
-            bb = d.bounds
-            unless bb.nil? || bb.empty?
-              dx = (bb.max.x - bb.min.x).abs / 1.mm
-              dy = (bb.max.y - bb.min.y).abs / 1.mm
-              dz = (bb.max.z - bb.min.z).abs / 1.mm
-              score += 15.0 if dz >= 50.0 && [dx, dy].min <= 80.0
-              score -= 30.0 if dx > 2000.0 || dy > 2000.0
-            end
-          rescue StandardError
-            nil
-          end
+          next unless graphic_wrap_definition_name?(n)
+          score = score_wrap_definition(d)
+          next if score < 0.0
           if score > best_score
             best_score = score
             best = d
           end
         end
-        puts "[ISOframe] best wrap def=#{best ? best.name : 'NONE'} score=#{best_score.round(1)}"
+        puts "[ISOframe] best wrap def=#{best ? best.name.inspect : 'NONE'} score=#{best_score.round(1)}"
         best
+      end
+
+      # Geometry fallback: best nested ComponentInstance def under loaded root.
+      def pick_wrap_def_from_root(root)
+        return nil unless root && root.valid?
+        best = nil
+        best_score = -1.0
+        walk = lambda do |entities, depth|
+          return if entities.nil? || depth > 10
+          entities.each do |e|
+            next unless e.is_a?(Sketchup::ComponentInstance) && e.valid?
+            d = e.definition
+            next unless d && d.valid?
+            n = d.name.to_s
+            iname = e.name.to_s
+            unless graphic_wrap_definition_name?(n) || graphic_wrap_definition_name?(iname)
+              # still score non-excluded nested defs as weak candidates
+              if n !~ GRAPHIC_WRAP_EXCLUDE_RE && iname !~ GRAPHIC_WRAP_EXCLUDE_RE
+                score = score_wrap_definition(d) - 15.0
+                if score > best_score
+                  best_score = score
+                  best = d
+                end
+              end
+            else
+              score = score_wrap_definition(d)
+              if score > best_score
+                best_score = score
+                best = d
+              end
+            end
+            walk.call(d.entities, depth + 1)
+          end
+        end
+        walk.call(root.entities, 0)
+        # Also consider root itself if it looks like a wrap assembly.
+        if graphic_wrap_definition_name?(root.name) || root.name.to_s =~ /graphic\s*wrap|keyboard/i
+          score = score_wrap_definition(root)
+          if score > best_score
+            best_score = score
+            best = root
+          end
+        end
+        puts "[ISOframe] root-walk wrap def=#{best ? best.name.inspect : 'NONE'} score=#{best_score.round(1)}"
+        best
+      rescue StandardError => e
+        puts "[ISOframe] pick_wrap_def_from_root failed: #{e.message}"
+        nil
       end
 
       # Place wrap under keyboard top, apron-front (viewer side).
@@ -959,18 +1058,29 @@ module ISOframe
         puts "[ISOframe] loading wrap SKP: #{path} (#{File.size(path)} bytes)"
 
         root = ensure_skp_imported!(model, path)
+        dump_model_definition_names!(model, 'after wrap SKP load')
+
         gdef = find_best_graphic_wrap_definition(model)
         unless gdef
           if root && root.valid?
             nested = find_graphic_wrap_with_transform(root.entities, 0, identity_transform)
             if nested && nested[0].is_a?(Sketchup::ComponentInstance)
               gdef = nested[0].definition
+              puts "[ISOframe] wrap from nested instance def=#{gdef.name.inspect}"
+            elsif nested && nested[0].is_a?(Sketchup::Group)
+              # Groups cannot be add_instance'd — keep searching.
+              puts "[ISOframe] nested wrap hit is a Group name=#{nested[0].name.inspect}"
             end
           end
         end
+        gdef = pick_wrap_def_from_root(root) if gdef.nil? || !gdef.valid?
+        # Place MUST succeed: instance the loaded SKP root if nothing else matched.
+        if gdef.nil? || !gdef.valid?
+          gdef = root
+          puts "[ISOframe] FALLBACK instancing wrap SKP root def=#{root.name.inspect}"
+        end
         unless gdef && gdef.valid?
-          raise "Loaded #{File.basename(path)} but found no Graphic Keyboard wrap definition. " \
-                "path=#{path}"
+          raise "Loaded #{File.basename(path)} but got no usable definition. path=#{path}"
         end
 
         local = wrap_placement_transform_for_bake(table_defn, gdef)
@@ -985,7 +1095,7 @@ module ISOframe
         rescue StandardError
           nil
         end
-        puts "[ISOframe] INSTANCED wrap from #{path} def=#{gdef.name} " \
+        puts "[ISOframe] INSTANCED wrap from #{path} def=#{gdef.name.inspect} " \
              "origin=#{local.origin}"
         [inst, local]
       rescue StandardError => e
@@ -2235,11 +2345,17 @@ module ISOframe
         blocked_apron_descend?(key) || !!(key.to_s =~ /attachment\s*wrap/i)
       end
 
-      # Never treat the wrap itself as the paint target (would include character mesh).
+      # Outer keyboard-attachment assembly only — NOT the Rolable/GraphicHint wrap
+      # (DC name "Keyboard Attachment wrap^…" IS the paint target; v0.1.70).
       def wrap_container?(iname, dname)
+        return false if graphic_wrap_definition_name?(iname) || graphic_wrap_definition_name?(dname)
         n = "#{iname} #{dname}"
-        !!(n =~ /attachment\s*wrap/i || n =~ /Keyboard Attachment wrap/i ||
-           n =~ /ISOframe Keyboard Attachment/i)
+        return true if n =~ /ISOframe Keyboard Attachment/i && n !~ /wrap|graphic|rolab|hint/i
+        # Bare "keyboard attachment" instance/def without wrap/graphic/hint.
+        bare = iname.to_s =~ /\A\s*keyboard\s*attachment\s*\z/i ||
+               dname.to_s =~ /\A\s*keyboard\s*attachment\s*\z/i
+        return true if bare
+        false
       end
 
       # Walk baked table for "keyboard lip" / Table Attachment Keyboard Lip.
