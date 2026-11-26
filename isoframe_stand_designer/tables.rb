@@ -48,6 +48,9 @@
 # v0.1.65: Richard's paint target is Keyboard_table_graphic_wrap.skp —
 # "Graphic Keyboard Attachment (Rolable)" (3-panel curved wrap). Paint FRONT
 # only + continuous UV + soft/hide edges. Lip/Boss-Extrude is no longer primary.
+# v0.1.66: v0.1.65 reported 2500 faces painted but texture invisible — cylindrical
+# UV + hide-all-edges + loose face dump. Use planar front UV (wall-style), paint
+# correct face side, soft+smooth without hide.
 
 module ISOframe
   module StandDesigner
@@ -59,8 +62,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v64 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v65',
+          # Fresh name so dealers drop any cached v43–v65 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v66',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -823,8 +826,9 @@ module ISOframe
         [nil, nil]
       end
 
-      # FRONT faces of the graphic wrap (viewer / floorspace side). Sides curve
-      # away — keep those with outward +Y-ish normals; skip rear/inward faces.
+      # FRONT faces of the graphic wrap (viewer side). Prefer larger vertical
+      # faces on the dominant outward side — never dump all verts (v0.1.65
+      # hit the 2500 cap with invisible texture).
       def select_graphic_wrap_front_faces(target, tr = nil)
         return [] unless target && target.valid?
         tr ||= identity_transform
@@ -833,26 +837,46 @@ module ISOframe
         enrich_sample_z_mm!(samples)
         return [] if samples.empty?
 
-        # Drop near-horizontal (top/bottom lip of thin wrap).
-        vert = samples.select { |s| s[:nz].to_f.abs < 0.85 && s[:area_mm2].to_f >= 0.5 }
-        vert = samples.select { |s| s[:area_mm2].to_f >= 0.5 } if vert.empty?
+        # Prefer meaningful facets (skip dust tris); allow looser if needed.
+        vert = samples.select { |s| s[:nz].to_f.abs < 0.70 && s[:area_mm2].to_f >= 5.0 }
+        vert = samples.select { |s| s[:nz].to_f.abs < 0.85 && s[:area_mm2].to_f >= 1.0 } if vert.size < 3
+        vert = samples.select { |s| s[:area_mm2].to_f >= 0.5 } if vert.size < 3
+        return [] if vert.empty?
 
-        front = vert.select { |s| s[:ny].to_f > 0.15 }
-        if front.empty?
-          front = vert.select { |s| s[:ny].to_f > 0.0 }
+        # Dominant horizontal outward (wrap may face +Y or −Y in bake space).
+        area_ny = vert.inject(0.0) { |a, s| a + s[:ny].to_f * s[:area_mm2].to_f }
+        view_sign = area_ny >= 0.0 ? 1.0 : -1.0
+        front = vert.select { |s| s[:ny].to_f * view_sign > 0.20 }
+        if front.size < 3
+          front = vert.select { |s| s[:ny].to_f * view_sign > 0.05 }
         end
-        if front.empty?
-          max_ny = vert.map { |s| s[:ny].to_f }.max
-          front = vert.select { |s| s[:ny].to_f >= max_ny - 0.08 } if max_ny
+        if front.size < 3
+          scored = vert.map { |s| [s[:ny].to_f * view_sign, s] }
+          max_d = scored.map(&:first).max
+          front = scored.select { |d, _| d >= max_d - 0.08 }.map(&:last)
         end
-        front = vert if front.nil? || front.empty?
 
-        if front.size > 8000
-          front = front.sort_by { |s| -s[:area_mm2] }.first(2500)
+        # Keep the large faces that make up the 3 panels — not thousands of crumbs.
+        front = front.sort_by { |s| -s[:area_mm2] }
+        if front.size > 400
+          front = front.first(400)
         end
         faces = front.map { |s| s[:face] }.compact
-        puts "[ISOframe] graphic wrap front faces=#{faces.size} raw=#{samples.size}"
+        puts "[ISOframe] graphic wrap front faces=#{faces.size} raw=#{samples.size} " \
+             "view_sign=#{view_sign}"
         faces
+      end
+
+      # Bake-root view direction for wrap front (+Y or −Y).
+      def graphic_wrap_view_dir(target, tr = nil)
+        tr ||= identity_transform
+        samples = []
+        gather_face_samples!(target, samples, 0, tr, 'graphic_wrap')
+        return Geom::Vector3d.new(0, 1, 0) if samples.empty?
+        area_ny = samples.inject(0.0) { |a, s| a + s[:ny].to_f * s[:area_mm2].to_f }
+        Geom::Vector3d.new(0, area_ny >= 0.0 ? 1.0 : -1.0, 0)
+      rescue StandardError
+        Geom::Vector3d.new(0, 1, 0)
       end
 
       def find_definition_by_name(model, pattern)

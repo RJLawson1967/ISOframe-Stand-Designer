@@ -31,6 +31,9 @@
 # + soft/smooth/hide edges so wrap front is line-free and posts don't show through.
 # v0.1.65: paint target is Keyboard_table_graphic_wrap.skp /
 # Graphic Keyboard Attachment (Rolable) — FRONT only, continuous UV, soft/hide.
+# v0.1.66: 2500 faces "applied" but texture invisible — use wall-style planar UV,
+# texture.size from wrap bounds, paint correct face side, soft+smooth without
+# hide (hide was blanking the textured front).
 
 module ISOframe
   module StandDesigner
@@ -317,8 +320,13 @@ module ISOframe
 
         mid = Attributes.get(table_inst, Constants::KEY_TABLE_HOST, 'table').to_s
         source = load_source_rep!(image_path)
-        mat = ensure_table_apron_material!(table_inst.model, mid, image_path, source, faces)
-        painted = paint_graphic_wrap_front!(faces, mat)
+        view = if wrap && wrap.valid?
+                 Tables.graphic_wrap_view_dir(wrap, wrap_tr)
+               else
+                 Geom::Vector3d.new(0, 1, 0)
+               end
+        mat = ensure_table_wrap_material!(table_inst.model, mid, image_path, source, faces)
+        painted = paint_graphic_wrap_front!(faces, mat, view, wrap_tr)
         if painted <= 0
           raise 'Could not UV-map the keyboard graphic wrap. Try another image, or toggle the table off/on.'
         end
@@ -327,46 +335,136 @@ module ISOframe
         painted
       end
 
-      # FRONT of graphic wrap: wallpaper + continuous UV; opaque reverse; soft/hide
-      # edges so the 3-panel wrap reads as one clean surface (no seam lines).
-      def paint_graphic_wrap_front!(faces, material)
+      # Visible wrap texture — same pattern as wall wallpaper that works:
+      #   1) material.texture from safe path + texture.size = wrap W×H (mm)
+      #   2) face.material AND back_material = that material (opaque)
+      #   3) planar UV (U across width, V up) via position_material on the
+      #      outward side — NOT cylindrical apron unwrap (collapsed on flat wrap)
+      #   4) soft+smooth seams only — do NOT hide edges (v0.1.65 hide blanked front)
+      def paint_graphic_wrap_front!(faces, material, view_dir = nil, face_tr = nil)
         return 0 if faces.nil? || faces.empty?
-        frame = apron_uv_frame(faces)
-        tex_w, tex_h = texture_dims(material, frame[:arc_len], frame[:height])
+        view_dir ||= Geom::Vector3d.new(0, 1, 0)
+        face_tr ||= Geom::Transformation.new
+        frame = wrap_planar_uv_frame(faces)
+        tex_w, tex_h = texture_dims(material, frame[:width], frame[:height])
         painted = 0
         faces.each do |face|
           begin
             next unless face.valid?
+            # Ensure the textured side faces the viewer (compare in bake-root).
+            begin
+              n_root = Tables.transform_as_normal(face.normal, face_tr)
+              if n_root.dot(view_dir) < -0.05
+                face.reverse!
+              end
+            rescue StandardError
+              nil
+            end
             verts = face.outer_loop.vertices.map(&:position)
             next if verts.size < 3
+
             face.material = material
             begin
-              # Opaque reverse so posts/structure never show through the wrap.
               face.back_material = material
             rescue StandardError
               nil
             end
-            mapping = apron_uv_mapping(verts, frame, tex_w, tex_h)
-            if mapping
-              begin
-                face.position_material(material, mapping, true)
-              rescue StandardError
-                nil
+
+            # Wall-style: harden briefly, position UV on front, restore soft.
+            softened = harden_face_edges(face)
+            begin
+              mapping = wrap_planar_uv_mapping(verts, frame, tex_w, tex_h)
+              if mapping
+                begin
+                  face.position_material(material, mapping, true)
+                rescue StandardError
+                  nil
+                end
               end
+              # Always re-assert materials then try pair UV (visible even if triplet fails).
+              face.material = material
+              face.back_material = material
+              pair = wrap_planar_uv_pair(verts, frame, tex_w, tex_h)
+              if pair
+                begin
+                  face.position_material(material, pair, true)
+                rescue StandardError
+                  nil
+                end
+              end
+            ensure
+              restore_face_edges(softened)
             end
-            painted += 1
+
+            painted += 1 if face.material == material
           rescue StandardError
             nil
           end
         end
-        soften_hide_graphic_front_edges!(faces)
+        # Soft+smooth only — keeps a clean wrap without blanking textured faces.
+        soften_smooth_graphic_front_edges!(faces)
         painted
+      end
+
+      # Material for wrap: load texture like wall bay materials; size = planar bounds.
+      def ensure_table_wrap_material!(model, table_key, image_path, source, faces)
+        name = "ISOframe Table Artwork #{table_key}"
+        mat = model.materials[name] || model.materials.add(name)
+        begin
+          mat.color = Sketchup::Color.new(255, 255, 255)
+          mat.alpha = 1.0 if mat.respond_to?(:alpha=)
+        rescue StandardError
+          nil
+        end
+        load_path = source.is_a?(Hash) ? source[:path] : nil
+        load_path = safe_image_load_path(normalize_image_path(image_path)) if load_path.nil? || !File.file?(load_path.to_s)
+        loaded = false
+        if load_path && File.file?(load_path.to_s)
+          begin
+            mat.texture = load_path
+            loaded = !mat.texture.nil?
+          rescue StandardError
+            loaded = false
+          end
+        end
+        unless loaded
+          begin
+            mat.texture = image_path
+            loaded = !mat.texture.nil?
+          rescue StandardError
+            loaded = false
+          end
+        end
+        raise 'SketchUp could not load keyboard wrap texture' unless loaded
+
+        frame = wrap_planar_uv_frame(faces)
+        w_mm = frame[:width].to_f / 1.mm
+        h_mm = frame[:height].to_f / 1.mm
+        w_mm = Constants::GRAPHIC_BAY_MM if w_mm < 10.0
+        h_mm = 400.0 if h_mm < 10.0
+        begin
+          rep = source.is_a?(Hash) ? source[:rep] : nil
+          if rep && rep.width.to_i > 0 && rep.height.to_i > 0
+            aspect = rep.height.to_f / rep.width.to_f
+            h_mm = [h_mm, w_mm * aspect].max
+          end
+        rescue StandardError
+          nil
+        end
+        set_texture_size!(mat, w_mm, h_mm)
+        mat
       end
 
       # Texture sized to the developed apron (one image across the curve).
       def ensure_table_apron_material!(model, table_key, image_path, source, apron_faces)
         name = "ISOframe Table Artwork #{table_key}"
         mat = model.materials[name] || model.materials.add(name)
+        begin
+          mat.color = Sketchup::Color.new(255, 255, 255)
+          mat.alpha = 1.0 if mat.respond_to?(:alpha=)
+        rescue StandardError
+          nil
+        end
         load_path = source.is_a?(Hash) ? source[:path] : nil
         load_path = safe_image_load_path(normalize_image_path(image_path)) if load_path.nil? || !File.file?(load_path.to_s)
         begin
@@ -379,6 +477,109 @@ module ISOframe
         width_mm, height_mm = apron_developed_size_mm(apron_faces, source)
         set_texture_size!(mat, width_mm, height_mm)
         mat
+      end
+
+      # Planar UV frame for the nearly-flat 3-panel wrap (U = width, V = height).
+      def wrap_planar_uv_frame(faces)
+        pts = []
+        faces.each do |f|
+          next unless f && f.valid?
+          f.outer_loop.vertices.each { |v| pts << v.position }
+        rescue StandardError
+          nil
+        end
+        raise 'No wrap vertices for UV' if pts.empty?
+
+        xs = pts.map { |p| p.x.to_f }
+        ys = pts.map { |p| p.y.to_f }
+        zs = pts.map { |p| p.z.to_f }
+        dx = xs.max - xs.min
+        dy = ys.max - ys.min
+        dz = zs.max - zs.min
+        # Horizontal U along the longer plan axis (wrap width).
+        if dx >= dy
+          {
+            u_axis: 0, u0: xs.min, u1: xs.max,
+            v0: zs.min, v1: zs.max,
+            width: [dx, 1.0.mm].max, height: [dz, 1.0.mm].max
+          }
+        else
+          {
+            u_axis: 1, u0: ys.min, u1: ys.max,
+            v0: zs.min, v1: zs.max,
+            width: [dy, 1.0.mm].max, height: [dz, 1.0.mm].max
+          }
+        end
+      end
+
+      def wrap_u_of(point, frame)
+        span = frame[:u1] - frame[:u0]
+        return 0.0 if span.abs < 1e-12
+        raw = frame[:u_axis] == 0 ? point.x.to_f : point.y.to_f
+        frac = (raw - frame[:u0]) / span
+        frac = 0.0 if frac < 0.0
+        frac = 1.0 if frac > 1.0
+        frac
+      end
+
+      def wrap_v_of(point, frame)
+        span = frame[:v1] - frame[:v0]
+        return 0.0 if span.abs < 1e-12
+        frac = (point.z.to_f - frame[:v0]) / span
+        frac = 0.0 if frac < 0.0
+        frac = 1.0 if frac > 1.0
+        frac
+      end
+
+      def wrap_planar_uv_pair(verts, frame, tex_w, tex_h)
+        return nil if verts.nil? || verts.size < 2
+        a = verts.min_by { |p| wrap_u_of(p, frame) }
+        b = verts.max_by { |p| wrap_u_of(p, frame) }
+        return nil if a.nil? || b.nil? || a == b
+        ua = Geom::Point3d.new(wrap_u_of(a, frame) * tex_w, wrap_v_of(a, frame) * tex_h, 0)
+        ub = Geom::Point3d.new(wrap_u_of(b, frame) * tex_w, wrap_v_of(b, frame) * tex_h, 0)
+        return nil if (ua.x - ub.x).abs < 1e-9 && (ua.y - ub.y).abs < 1e-9
+        [a, ua, b, ub]
+      end
+
+      def wrap_planar_uv_mapping(verts, frame, tex_w, tex_h)
+        return nil if verts.nil? || verts.size < 3
+        a = verts.min_by { |p| wrap_u_of(p, frame) }
+        b = verts.max_by { |p| wrap_u_of(p, frame) }
+        c = verts.max_by { |p| wrap_v_of(p, frame) }
+        trio = [a, b, c].compact.uniq
+        return wrap_planar_uv_pair(verts, frame, tex_w, tex_h) if trio.size < 3
+
+        mapping = []
+        trio.each do |p|
+          mapping << p
+          mapping << Geom::Point3d.new(wrap_u_of(p, frame) * tex_w, wrap_v_of(p, frame) * tex_h, 0)
+        end
+        mapping
+      end
+
+      # Soft+smooth only (no hide) — v0.1.65 hide blanked the textured front.
+      def soften_smooth_graphic_front_edges!(faces)
+        return if faces.nil? || faces.empty?
+        seen = {}
+        faces.each do |face|
+          next unless face && face.valid?
+          face.edges.each do |e|
+            next unless e && e.valid?
+            next if seen[e.entityID]
+            seen[e.entityID] = true
+            next if e.faces.size < 2
+            begin
+              e.soft = true
+              e.smooth = true
+              # Do not hide edges — that blanked textured fronts in v0.1.65.
+            rescue StandardError
+              nil
+            end
+          end
+        end
+      rescue StandardError
+        nil
       end
 
       def apron_developed_size_mm(faces, source)
@@ -439,28 +640,10 @@ module ISOframe
         painted
       end
 
-      # Soft + smooth + hide edges on painted graphic faces so the front is
-      # free of mesh lines/detail (apron wrap or wall panel ribs).
+      # Soft + smooth edges on painted graphic faces (no hide — hide blanked
+      # textured fronts in v0.1.65). Kept name for older call sites.
       def soften_hide_graphic_front_edges!(faces)
-        return if faces.nil? || faces.empty?
-        seen = {}
-        faces.each do |face|
-          next unless face && face.valid?
-          face.edges.each do |e|
-            next unless e && e.valid?
-            next if seen[e.entityID]
-            seen[e.entityID] = true
-            begin
-              e.soft = true
-              e.smooth = true
-              e.hidden = true
-            rescue StandardError
-              nil
-            end
-          end
-        end
-      rescue StandardError
-        nil
+        soften_smooth_graphic_front_edges!(faces)
       end
 
       def apron_uv_frame(faces)
