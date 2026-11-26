@@ -34,6 +34,9 @@
 # v0.1.66: 2500 faces "applied" but texture invisible — use wall-style planar UV,
 # texture.size from wrap bounds, paint correct face side, soft+smooth without
 # hide (hide was blanking the textured front).
+# v0.1.67: “2500 faces” was apron fallback. Remove it. Table wrap now calls the
+# same ensure_* texture + paint_front_face! path as wall wallpaper; make_unique
+# nested defs; prove face.material.texture non-nil; dialog reports tex size.
 
 module ISOframe
   module StandDesigner
@@ -241,11 +244,19 @@ module ISOframe
           Attributes.set(host, Constants::KEY_TABLE_ARTWORK_PATH, image_path.to_s) if host && host.valid?
           painted = map_table_instance!(table_inst, image_path)
           if painted <= 0
-            raise 'No under-table graphic faces found to paint.'
+            raise 'No graphic wrap faces found to paint.'
           end
           model.commit_operation
-          msg = "Table artwork applied (#{painted} face#{painted == 1 ? '' : 's'}). " \
-                'Wall wallpaper is unchanged.'
+          rep = @last_table_paint_report || {}
+          tex_sz = rep[:texture_size]
+          tex_s = if tex_sz.is_a?(Array) && tex_sz.size >= 2
+                    format('%.1f×%.1f mm', tex_sz[0].to_f * 25.4, tex_sz[1].to_f * 25.4)
+                  else
+                    tex_sz.inspect
+                  end
+          msg = "Table artwork applied (#{painted} face#{painted == 1 ? '' : 's'}; " \
+                "textured=#{rep[:textured] || '?'}; material=#{rep[:material] || '?'}; " \
+                "texture size=#{tex_s}). Wall wallpaper is unchanged."
           Sketchup.status_text = msg
           UI.messagebox(msg)
           true
@@ -288,143 +299,101 @@ module ISOframe
 
       def map_table_instance!(table_inst, image_path)
         return 0 unless table_inst && table_inst.valid?
+        @last_table_paint_report = nil
         defn = table_inst.definition
         begin
-          if defn.respond_to?(:make_unique) && defn.count_instances.to_i > 1
-            table_inst.make_unique if table_inst.respond_to?(:make_unique)
+          if table_inst.respond_to?(:make_unique) && defn.count_instances.to_i > 1
+            table_inst.make_unique
             defn = table_inst.definition
           end
         rescue StandardError
           nil
         end
 
-        # v0.1.65: Graphic Keyboard Attachment (Rolable) / Keyboard_table_graphic_wrap.skp
+        # v0.1.67: Graphic Keyboard wrap ONLY — never fall back to apron dump.
         Tables.purge_synthetic_table_graphic_panels!(defn)
         Tables.mark_table_graphic_targets!(defn)
-        wrap, wrap_tr = Tables.ensure_graphic_wrap_target!(defn, table_inst.model)
-        faces = Tables.select_graphic_wrap_front_faces(wrap, wrap_tr)
-        if faces.empty?
-          # Fallback: legacy lip/geometric apron if wrap missing from old bake.
-          faces = Tables.select_keyboard_apron_faces(defn)
-        end
-        if faces.empty?
+        wrap, _wrap_tr = Tables.ensure_graphic_wrap_target!(defn, table_inst.model)
+        unless wrap && wrap.valid?
           dump = Tables.dump_baked_entity_names(defn.entities, 0)
-          raise 'No keyboard graphic wrap faces found. ' \
-                'Toggle Keyboard Table off/on once (v65 bake), then try again. ' \
-                "wrap=#{wrap ? wrap.name : 'NONE'} bake=#{dump}"
+          raise 'No Graphic Keyboard Attachment (Rolable) wrap found. ' \
+                'Toggle Keyboard Table off/on once (v67 bake), then try again. ' \
+                "bake=#{dump}"
         end
-        if faces.size > 8000
-          raise "Graphic wrap face filter too broad (#{faces.size} faces). " \
-                'Expected Graphic Keyboard Attachment front only — report to support.'
+
+        prep = Tables.prepare_graphic_wrap_for_paint!(wrap)
+        unless prep && prep[:faces] && !prep[:faces].empty?
+          raise 'Graphic wrap has no outward front faces to paint. ' \
+                'Toggle Keyboard Table off/on (v67), then try again.'
+        end
+        faces = prep[:faces]
+        if faces.size > 500
+          raise "Graphic wrap face filter too broad (#{faces.size}). Expected wrap front only."
         end
 
         mid = Attributes.get(table_inst, Constants::KEY_TABLE_HOST, 'table').to_s
         source = load_source_rep!(image_path)
-        view = if wrap && wrap.valid?
-                 Tables.graphic_wrap_view_dir(wrap, wrap_tr)
-               else
-                 Geom::Vector3d.new(0, 1, 0)
-               end
-        mat = ensure_table_wrap_material!(table_inst.model, mid, image_path, source, faces)
-        painted = paint_graphic_wrap_front!(faces, mat, view, wrap_tr)
-        if painted <= 0
-          raise 'Could not UV-map the keyboard graphic wrap. Try another image, or toggle the table off/on.'
+        # SAME as wall: load texture + set_texture_size so default fit shows photo.
+        mat = ensure_wrap_material_like_wall!(
+          table_inst.model, mid, source, image_path, prep[:width_mm], prep[:height_mm]
+        )
+        unless mat && mat.texture
+          raise 'Wrap material has no texture after load (wall-style ensure failed).'
         end
-        puts "[ISOframe] Table graphic wrap painted faces=#{painted} " \
-             "wrap=#{wrap ? wrap.name : 'fallback'}"
+
+        painted = map_wrap_faces_like_wall!(faces, mat, prep[:path_local], prep[:height_mm])
+        textured = count_faces_with_texture(faces)
+        if textured <= 0
+          raise 'Paint ran but face.material.texture is nil on wrap fronts. ' \
+                'Material may be on a shared nested definition — report to support.'
+        end
+
+        @last_table_paint_report = {
+          faces: painted,
+          textured: textured,
+          material: mat.name.to_s,
+          texture_size: (mat.texture.size rescue nil)
+        }
+        puts "[ISOframe] Table wrap WALL-PATH painted=#{painted} textured=#{textured} " \
+             "mat=#{mat.name} tex=#{@last_table_paint_report[:texture_size].inspect}"
         painted
       end
 
-      # Visible wrap texture — same pattern as wall wallpaper that works:
-      #   1) material.texture from safe path + texture.size = wrap W×H (mm)
-      #   2) face.material AND back_material = that material (opaque)
-      #   3) planar UV (U across width, V up) via position_material on the
-      #      outward side — NOT cylindrical apron unwrap (collapsed on flat wrap)
-      #   4) soft+smooth seams only — do NOT hide edges (v0.1.65 hide blanked front)
-      def paint_graphic_wrap_front!(faces, material, view_dir = nil, face_tr = nil)
-        return 0 if faces.nil? || faces.empty?
-        view_dir ||= Geom::Vector3d.new(0, 1, 0)
-        face_tr ||= Geom::Transformation.new
-        frame = wrap_planar_uv_frame(faces)
-        tex_w, tex_h = texture_dims(material, frame[:width], frame[:height])
-        painted = 0
-        faces.each do |face|
-          begin
-            next unless face.valid?
-            # Ensure the textured side faces the viewer (compare in bake-root).
-            begin
-              n_root = Tables.transform_as_normal(face.normal, face_tr)
-              if n_root.dot(view_dir) < -0.05
-                face.reverse!
-              end
-            rescue StandardError
-              nil
-            end
-            verts = face.outer_loop.vertices.map(&:position)
-            next if verts.size < 3
-
-            face.material = material
-            begin
-              face.back_material = material
-            rescue StandardError
-              nil
-            end
-
-            # Wall-style: harden briefly, position UV on front, restore soft.
-            softened = harden_face_edges(face)
-            begin
-              mapping = wrap_planar_uv_mapping(verts, frame, tex_w, tex_h)
-              if mapping
-                begin
-                  face.position_material(material, mapping, true)
-                rescue StandardError
-                  nil
-                end
-              end
-              # Always re-assert materials then try pair UV (visible even if triplet fails).
-              face.material = material
-              face.back_material = material
-              pair = wrap_planar_uv_pair(verts, frame, tex_w, tex_h)
-              if pair
-                begin
-                  face.position_material(material, pair, true)
-                rescue StandardError
-                  nil
-                end
-              end
-            ensure
-              restore_face_edges(softened)
-            end
-
-            painted += 1 if face.material == material
-          rescue StandardError
-            nil
-          end
-        end
-        # Soft+smooth only — keeps a clean wrap without blanking textured faces.
-        soften_smooth_graphic_front_edges!(faces)
-        painted
-      end
-
-      # Material for wrap: load texture like wall bay materials; size = planar bounds.
-      def ensure_table_wrap_material!(model, table_key, image_path, source, faces)
+      # Wall-identical material load: texture from file/ImageRep + texture.size in mm.
+      def ensure_wrap_material_like_wall!(model, table_key, source, image_path, width_mm, height_mm)
         name = "ISOframe Table Artwork #{table_key}"
-        mat = model.materials[name] || model.materials.add(name)
+        mat = model.materials[name]
+        mat ||= model.materials.add(name)
         begin
           mat.color = Sketchup::Color.new(255, 255, 255)
           mat.alpha = 1.0 if mat.respond_to?(:alpha=)
         rescue StandardError
           nil
         end
-        load_path = source.is_a?(Hash) ? source[:path] : nil
-        load_path = safe_image_load_path(normalize_image_path(image_path)) if load_path.nil? || !File.file?(load_path.to_s)
+
+        w_mm = [width_mm.to_f, 10.0].max
+        h_mm = [height_mm.to_f, 10.0].max
         loaded = false
-        if load_path && File.file?(load_path.to_s)
+        rep = source.is_a?(Hash) ? source[:rep] : nil
+        # Full image (wrap is one panel, not a bay crop) — same texture= assignment as wall.
+        if rep && defined?(Sketchup::ImageRep)
           begin
-            mat.texture = load_path
+            mat.texture = rep
             loaded = !mat.texture.nil?
           rescue StandardError
             loaded = false
+          end
+        end
+        unless loaded
+          path = source.is_a?(Hash) ? source[:path] : nil
+          path = safe_image_load_path(normalize_image_path(image_path)) if path.nil? || !File.file?(path.to_s)
+          if path && File.file?(path)
+            begin
+              mat.texture = path
+              loaded = !mat.texture.nil?
+            rescue StandardError
+              loaded = false
+            end
           end
         end
         unless loaded
@@ -435,15 +404,9 @@ module ISOframe
             loaded = false
           end
         end
-        raise 'SketchUp could not load keyboard wrap texture' unless loaded
+        raise 'SketchUp could not load wrap texture (wall-style)' unless loaded
 
-        frame = wrap_planar_uv_frame(faces)
-        w_mm = frame[:width].to_f / 1.mm
-        h_mm = frame[:height].to_f / 1.mm
-        w_mm = Constants::GRAPHIC_BAY_MM if w_mm < 10.0
-        h_mm = 400.0 if h_mm < 10.0
         begin
-          rep = source.is_a?(Hash) ? source[:rep] : nil
           if rep && rep.width.to_i > 0 && rep.height.to_i > 0
             aspect = rep.height.to_f / rep.width.to_f
             h_mm = [h_mm, w_mm * aspect].max
@@ -452,7 +415,74 @@ module ISOframe
           nil
         end
         set_texture_size!(mat, w_mm, h_mm)
+        raise 'Wrap material.texture nil after set_texture_size' if mat.texture.nil?
         mat
+      end
+
+      # Paint wrap fronts with the proven wall paint_front_face! helper.
+      def map_wrap_faces_like_wall!(faces, material, path, height_mm)
+        return 0 if faces.nil? || faces.empty? || material.nil?
+        path ||= [
+          Geom::Point3d.new(0, 0, 0),
+          Geom::Point3d.new(Constants::GRAPHIC_BAY_MM.mm, 0, 0)
+        ]
+        tex_w, tex_h = texture_dims(material, Constants::GRAPHIC_BAY_MM.mm, height_mm.to_f.mm)
+        u0 = 0.0
+        u1 = tex_w
+        h = tex_h
+        cum = path_cumulative_lengths(path)
+        total = cum.empty? ? 0.0 : cum.last
+        total = tex_w if total < 1e-9
+
+        painted = 0
+        faces.each do |face|
+          next unless face && face.valid?
+          painted += 1 if paint_front_face!(face, material, u0, u1, h, path, cum, total)
+        end
+        soften_smooth_graphic_front_edges!(faces)
+        painted
+      end
+
+      def count_faces_with_texture(faces)
+        n = 0
+        faces.each do |f|
+          next unless f && f.valid?
+          m = f.material
+          n += 1 if m && m.respond_to?(:texture) && m.texture
+        rescue StandardError
+          nil
+        end
+        n
+      end
+
+      # Legacy name — redirects to wall-style ensure (kept for older tests).
+      def ensure_table_wrap_material!(model, table_key, image_path, source, faces)
+        prep_w = Constants::GRAPHIC_BAY_MM
+        prep_h = 400.0
+        begin
+          w, h, _p = Tables.wrap_uv_path_from_faces(faces)
+          prep_w = w
+          prep_h = h
+        rescue StandardError
+          nil
+        end
+        ensure_wrap_material_like_wall!(model, table_key, source, image_path, prep_w, prep_h)
+      end
+
+      # Legacy paint entry — now wall path.
+      def paint_graphic_wrap_front!(faces, material, view_dir = nil, face_tr = nil)
+        _ = view_dir
+        _ = face_tr
+        return 0 unless material && material.texture
+        w_mm = Constants::GRAPHIC_BAY_MM
+        h_mm = 400.0
+        path = nil
+        begin
+          w_mm, h_mm, path = Tables.wrap_uv_path_from_faces(faces)
+        rescue StandardError
+          nil
+        end
+        map_wrap_faces_like_wall!(faces, material, path, h_mm)
       end
 
       # Texture sized to the developed apron (one image across the curve).

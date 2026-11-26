@@ -51,6 +51,9 @@
 # v0.1.66: v0.1.65 reported 2500 faces painted but texture invisible — cylindrical
 # UV + hide-all-edges + loose face dump. Use planar front UV (wall-style), paint
 # correct face side, soft+smooth without hide.
+# v0.1.67: still “2500 faces” = apron fallback. Stop fallback. Reuse wall
+# ensure_bay_material + paint_front_face path; make_unique nested defs; prove
+# face.material.texture non-nil.
 
 module ISOframe
   module StandDesigner
@@ -62,8 +65,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v65 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v66',
+          # Fresh name so dealers drop any cached v43–v66 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v67',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -826,55 +829,154 @@ module ISOframe
         [nil, nil]
       end
 
-      # FRONT faces of the graphic wrap (viewer side). Prefer larger vertical
-      # faces on the dominant outward side — never dump all verts (v0.1.65
-      # hit the 2500 cap with invisible texture).
-      def select_graphic_wrap_front_faces(target, tr = nil)
-        return [] unless target && target.valid?
-        tr ||= identity_transform
+      # make_unique wrap + nested CIs, then collect FRONT faces only (outward).
+      # Returns { faces:, view_dir:, width_mm:, height_mm:, path_local: } or nil.
+      def prepare_graphic_wrap_for_paint!(wrap_ent)
+        return nil unless wrap_ent && wrap_ent.valid?
+        make_unique_wrap_tree!(wrap_ent)
         samples = []
-        gather_face_samples!(target, samples, 0, tr, 'graphic_wrap')
-        enrich_sample_z_mm!(samples)
-        return [] if samples.empty?
+        tr0 = identity_transform
+        gather_wrap_paint_samples!(wrap_ent, samples, 0, tr0)
+        return nil if samples.empty?
 
-        # Prefer meaningful facets (skip dust tris); allow looser if needed.
-        vert = samples.select { |s| s[:nz].to_f.abs < 0.70 && s[:area_mm2].to_f >= 5.0 }
-        vert = samples.select { |s| s[:nz].to_f.abs < 0.85 && s[:area_mm2].to_f >= 1.0 } if vert.size < 3
-        vert = samples.select { |s| s[:area_mm2].to_f >= 0.5 } if vert.size < 3
-        return [] if vert.empty?
-
-        # Dominant horizontal outward (wrap may face +Y or −Y in bake space).
-        area_ny = vert.inject(0.0) { |a, s| a + s[:ny].to_f * s[:area_mm2].to_f }
+        area_ny = samples.inject(0.0) { |a, s| a + s[:ny].to_f * [s[:area_mm2].to_f, 0.01].max }
         view_sign = area_ny >= 0.0 ? 1.0 : -1.0
-        front = vert.select { |s| s[:ny].to_f * view_sign > 0.20 }
-        if front.size < 3
-          front = vert.select { |s| s[:ny].to_f * view_sign > 0.05 }
+        view_dir = Geom::Vector3d.new(0, view_sign, 0)
+
+        # Prefer vertical faces on the outward side; loosen if sparse.
+        vert = samples.select { |s| s[:nz].to_f.abs < 0.75 }
+        vert = samples if vert.size < 2
+        front = vert.select { |s| s[:ny].to_f * view_sign > 0.12 }
+        if front.size < 2
+          front = vert.select { |s| s[:ny].to_f * view_sign > 0.0 }
         end
-        if front.size < 3
-          scored = vert.map { |s| [s[:ny].to_f * view_sign, s] }
-          max_d = scored.map(&:first).max
-          front = scored.select { |d, _| d >= max_d - 0.08 }.map(&:last)
+        if front.size < 2
+          max_d = vert.map { |s| s[:ny].to_f * view_sign }.max
+          front = vert.select { |s| s[:ny].to_f * view_sign >= max_d - 0.1 }
+        end
+        front = front.sort_by { |s| -s[:area_mm2].to_f }
+        # Hard cap — never the old 2500 apron dump.
+        front = front.first(200) if front.size > 200
+        faces = front.map { |s| s[:face] }.compact.select(&:valid?)
+        return nil if faces.empty?
+
+        # Reverse faces whose root normal points inward so material faces viewer.
+        faces.each do |f|
+          begin
+            s = front.find { |x| x[:face] && x[:face].entityID == f.entityID }
+            next unless s
+            if s[:ny].to_f * view_sign < -0.05
+              f.reverse!
+            end
+          rescue StandardError
+            nil
+          end
         end
 
-        # Keep the large faces that make up the 3 panels — not thousands of crumbs.
-        front = front.sort_by { |s| -s[:area_mm2] }
-        if front.size > 400
-          front = front.first(400)
-        end
-        faces = front.map { |s| s[:face] }.compact
-        puts "[ISOframe] graphic wrap front faces=#{faces.size} raw=#{samples.size} " \
-             "view_sign=#{view_sign}"
-        faces
+        width_mm, height_mm, path_local = wrap_uv_path_from_faces(faces)
+        puts "[ISOframe] prepare wrap front=#{faces.size} raw=#{samples.size} " \
+             "view_sign=#{view_sign} #{width_mm.round(1)}x#{height_mm.round(1)}mm"
+        {
+          faces: faces,
+          view_dir: view_dir,
+          width_mm: width_mm,
+          height_mm: height_mm,
+          path_local: path_local
+        }
+      rescue StandardError => e
+        puts "[ISOframe] prepare_graphic_wrap_for_paint! failed: #{e.message}"
+        nil
       end
 
-      # Bake-root view direction for wrap front (+Y or −Y).
+      def make_unique_wrap_tree!(ent, depth = 0)
+        return if ent.nil? || !ent.valid? || depth > 10
+        if ent.is_a?(Sketchup::ComponentInstance)
+          begin
+            if ent.definition && ent.definition.count_instances.to_i > 1 && ent.respond_to?(:make_unique)
+              ent.make_unique
+            end
+          rescue StandardError
+            nil
+          end
+          ent.definition.entities.each { |c| make_unique_wrap_tree!(c, depth + 1) }
+        elsif ent.is_a?(Sketchup::Group)
+          ent.entities.each { |c| make_unique_wrap_tree!(c, depth + 1) }
+        end
+      rescue StandardError
+        nil
+      end
+
+      # Faces under the wrap paint target only (no character / posts / top).
+      def gather_wrap_paint_samples!(entity_or_entities, out, depth, tr)
+        return if depth > 10
+        ents = entities_of(entity_or_entities)
+        return if ents.nil?
+        ents.each do |e|
+          if e.is_a?(Sketchup::Face) && e.valid?
+            n = transform_as_normal(e.normal, tr)
+            out << {
+              face: e,
+              nx: n.x.to_f, ny: n.y.to_f, nz: n.z.to_f,
+              area_mm2: face_area_mm2_local(e),
+              points_root: e.outer_loop.vertices.map { |v| tr * v.position }
+            }
+          elsif e.is_a?(Sketchup::Group) && e.valid?
+            iname = e.name.to_s
+            next if iname =~ /\bsree\b|keyboard\s*top|keyboard\s*base|table\s*post|\b763\b/i
+            gather_wrap_paint_samples!(e, out, depth + 1, tr * e.transformation)
+          elsif e.is_a?(Sketchup::ComponentInstance) && e.valid?
+            iname = e.name.to_s
+            dname = def_name_of(e)
+            key = "#{iname} #{dname}"
+            next if key =~ /\bsree\b|keyboard\s*top|keyboard\s*base|table\s*post|\b763\b|beam|adjustable\s*foot/i
+            gather_wrap_paint_samples!(e, out, depth + 1, tr * e.transformation)
+          end
+        end
+      end
+
+      # Straight UV path across wrap width (same helper family as wall bay path).
+      def wrap_uv_path_from_faces(faces)
+        pts = []
+        faces.each do |f|
+          next unless f.valid?
+          f.outer_loop.vertices.each { |v| pts << v.position }
+        rescue StandardError
+          nil
+        end
+        raise 'No wrap verts' if pts.empty?
+        xs = pts.map(&:x)
+        ys = pts.map(&:y)
+        zs = pts.map(&:z)
+        dx = xs.max - xs.min
+        dy = ys.max - ys.min
+        dz = zs.max - zs.min
+        y_front = (ys.min + ys.max) * 0.5
+        if dx >= dy
+          path = [
+            Geom::Point3d.new(xs.min, y_front, 0),
+            Geom::Point3d.new(xs.max, y_front, 0)
+          ]
+          width_mm = [dx / 1.mm, 10.0].max
+        else
+          path = [
+            Geom::Point3d.new(xs.min, ys.min, 0),
+            Geom::Point3d.new(xs.min, ys.max, 0)
+          ]
+          width_mm = [dy / 1.mm, 10.0].max
+        end
+        height_mm = [dz / 1.mm, 10.0].max
+        [width_mm, height_mm, path]
+      end
+
+      # Kept for older callers / tests — delegates to prepare.
+      def select_graphic_wrap_front_faces(target, tr = nil)
+        prep = prepare_graphic_wrap_for_paint!(target)
+        prep ? prep[:faces] : []
+      end
+
       def graphic_wrap_view_dir(target, tr = nil)
-        tr ||= identity_transform
-        samples = []
-        gather_face_samples!(target, samples, 0, tr, 'graphic_wrap')
-        return Geom::Vector3d.new(0, 1, 0) if samples.empty?
-        area_ny = samples.inject(0.0) { |a, s| a + s[:ny].to_f * s[:area_mm2].to_f }
-        Geom::Vector3d.new(0, area_ny >= 0.0 ? 1.0 : -1.0, 0)
+        prep = prepare_graphic_wrap_for_paint!(target)
+        prep ? prep[:view_dir] : Geom::Vector3d.new(0, 1, 0)
       rescue StandardError
         Geom::Vector3d.new(0, 1, 0)
       end
