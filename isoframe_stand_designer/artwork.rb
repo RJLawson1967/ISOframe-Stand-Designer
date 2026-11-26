@@ -29,6 +29,8 @@
 # then force rear *slab* faces to a named plain Material (not nil, not empty).
 # Table apron: never-empty geometric fallback when lip=NONE; opaque both sides
 # + soft/smooth/hide edges so wrap front is line-free and posts don't show through.
+# v0.1.65: paint target is Keyboard_table_graphic_wrap.skp /
+# Graphic Keyboard Attachment (Rolable) — FRONT only, continuous UV, soft/hide.
 
 module ISOframe
   module StandDesigner
@@ -293,30 +295,71 @@ module ISOframe
           nil
         end
 
-        # v0.1.64: named lip or geometric apron (Boss-Extrude); no top/beams.
+        # v0.1.65: Graphic Keyboard Attachment (Rolable) / Keyboard_table_graphic_wrap.skp
         Tables.purge_synthetic_table_graphic_panels!(defn)
         Tables.mark_table_graphic_targets!(defn)
-        lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
-        apron = Tables.select_keyboard_apron_faces(defn)
-        if apron.empty?
-          dump = Tables.dump_baked_entity_names(defn.entities, 0)
-          raise 'No under-table apron faces found. ' \
-                'Toggle Keyboard Table off/on once (v64 bake), then try again. ' \
-                "lip=#{lip ? lip.name : 'NONE'} bake=#{dump}"
+        wrap, wrap_tr = Tables.ensure_graphic_wrap_target!(defn, table_inst.model)
+        faces = Tables.select_graphic_wrap_front_faces(wrap, wrap_tr)
+        if faces.empty?
+          # Fallback: legacy lip/geometric apron if wrap missing from old bake.
+          faces = Tables.select_keyboard_apron_faces(defn)
         end
-        if apron.size > 8000
-          raise "Apron face filter too broad (#{apron.size} faces). " \
-                'Expected lip apron only — report to support.'
+        if faces.empty?
+          dump = Tables.dump_baked_entity_names(defn.entities, 0)
+          raise 'No keyboard graphic wrap faces found. ' \
+                'Toggle Keyboard Table off/on once (v65 bake), then try again. ' \
+                "wrap=#{wrap ? wrap.name : 'NONE'} bake=#{dump}"
+        end
+        if faces.size > 8000
+          raise "Graphic wrap face filter too broad (#{faces.size} faces). " \
+                'Expected Graphic Keyboard Attachment front only — report to support.'
         end
 
         mid = Attributes.get(table_inst, Constants::KEY_TABLE_HOST, 'table').to_s
         source = load_source_rep!(image_path)
-        mat = ensure_table_apron_material!(table_inst.model, mid, image_path, source, apron)
-        painted = paint_apron_continuous!(apron, mat)
+        mat = ensure_table_apron_material!(table_inst.model, mid, image_path, source, faces)
+        painted = paint_graphic_wrap_front!(faces, mat)
         if painted <= 0
-          raise 'Could not UV-map the under-table apron. Try another image, or toggle the table off/on.'
+          raise 'Could not UV-map the keyboard graphic wrap. Try another image, or toggle the table off/on.'
         end
-        puts "[ISOframe] Table apron painted faces=#{painted} lip=#{lip ? lip.name : 'nil'}"
+        puts "[ISOframe] Table graphic wrap painted faces=#{painted} " \
+             "wrap=#{wrap ? wrap.name : 'fallback'}"
+        painted
+      end
+
+      # FRONT of graphic wrap: wallpaper + continuous UV; opaque reverse; soft/hide
+      # edges so the 3-panel wrap reads as one clean surface (no seam lines).
+      def paint_graphic_wrap_front!(faces, material)
+        return 0 if faces.nil? || faces.empty?
+        frame = apron_uv_frame(faces)
+        tex_w, tex_h = texture_dims(material, frame[:arc_len], frame[:height])
+        painted = 0
+        faces.each do |face|
+          begin
+            next unless face.valid?
+            verts = face.outer_loop.vertices.map(&:position)
+            next if verts.size < 3
+            face.material = material
+            begin
+              # Opaque reverse so posts/structure never show through the wrap.
+              face.back_material = material
+            rescue StandardError
+              nil
+            end
+            mapping = apron_uv_mapping(verts, frame, tex_w, tex_h)
+            if mapping
+              begin
+                face.position_material(material, mapping, true)
+              rescue StandardError
+                nil
+              end
+            end
+            painted += 1
+          rescue StandardError
+            nil
+          end
+        end
+        soften_hide_graphic_front_edges!(faces)
         painted
       end
 
