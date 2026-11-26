@@ -95,6 +95,18 @@ def main() -> None:
     assert_("Tables.follow_hosts!" in flex, "flex tool host-follow")
     assert_("host.transformation * local" in tables, "table = host * locked local")
 
+    # Wall wallpaper: front photo only; reverse + rear slab = panel plain tint
+    geom = read("isoframe_stand_designer/geometry.rb")
+    assert_("GRAPHIC_PLAIN_RGB = [230, 235, 245]" in geom, "plain RGB constant")
+    assert_("def plain_wall_color" in artwork, "plain wall color helper")
+    assert_("def restore_plain_wall_faces!" in artwork, "restore plain rear")
+    assert_("def recover_front_faces_from_vertical" in artwork, "no all-vertical fallback")
+    assert_("face.back_material = plain" in artwork, "front reverse stays plain")
+    # paint_front_face! must not assign wallpaper to back_material
+    pfn = artwork.split("def paint_front_face!", 1)[1].split("\n      def ", 1)[0]
+    assert_("face.back_material = material" not in pfn, "wall reverse != wallpaper")
+    assert_("face.back_material = plain" in pfn, "wall reverse = plain in paint_front")
+
     skp = os.path.join(ROOT, "isoframe_stand_designer", "models", "Keyboard_with_Extension.skp")
     raw = zipfile.ZipFile(skp).read("model.dat").decode("latin-1", "ignore")
     assert_("Boss-Extrude" in raw, "SKP has Boss-Extrude defs")
@@ -169,7 +181,10 @@ def main() -> None:
     assert_("SHIFT_LEFT_MM = 70.7" in lights, "LED shift locked")
 
     print("OK — v0.1.63 checks passed")
-    print(f"Proof: apron score={s_apron:.1f}>0; tabletop/beam rejected; lip-name optional")
+    print(
+        f"Proof: apron score={s_apron:.1f}>0; tabletop/beam rejected; "
+        "lip-name optional; wall front-only + plain rear; host-follow"
+    )
     return 0
 
 

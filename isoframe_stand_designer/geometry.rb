@@ -33,6 +33,8 @@ module ISOframe
       # Graphic slab depth + tiny lift off the post front face (avoids z-fight show-through).
       GRAPHIC_THICKNESS_MM = 3.0
       GRAPHIC_FRONT_CLEARANCE_MM = 1.0
+      # Default GraphicHint tint (front wallpaper reverse + rear slab stay this plain).
+      GRAPHIC_PLAIN_RGB = [230, 235, 245].freeze
       # HEIGHTS_MM = overall graphic panel height (Mini/Midi/Maxi). Graphic spans
       # [GRAPHIC_Z_BOT_MM, GRAPHIC_Z_BOT_MM + HEIGHTS_MM]. Post tip is 5 mm below
       # graphic top (graphic protrudes 5 mm above the post).
@@ -664,7 +666,7 @@ module ISOframe
           z_top: z_top,
           thickness_mm: GRAPHIC_THICKNESS_MM,
           name: GROUP_GRAPHIC,
-          color: Sketchup::Color.new(230, 235, 245),
+          color: Sketchup::Color.new(*GRAPHIC_PLAIN_RGB),
           front_biased: true,
           front_clearance_mm: GRAPHIC_FRONT_CLEARANCE_MM
         )
