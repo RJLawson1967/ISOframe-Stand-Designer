@@ -54,6 +54,9 @@
 # v0.1.67: still “2500 faces” = apron fallback. Stop fallback. Reuse wall
 # ensure_bay_material + paint_front_face path; make_unique nested defs; prove
 # face.material.texture non-nil.
+# v0.1.68: live bake has only Boss-Extrude children — Graphic Keyboard wrap is
+# NEVER in Keyboard_with_Extension bake. Always load Keyboard_table_graphic_wrap.skp
+# and instance it under the top (apron front) on place + apply.
 
 module ISOframe
   module StandDesigner
@@ -65,8 +68,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v66 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v67',
+          # Fresh name so dealers drop any cached v43–v67 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v68',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -742,22 +745,43 @@ module ISOframe
           n =~ /keyboard.table.graphic.wrap/i
       end
 
-      # True for Graphic Keyboard Attachment (Rolable) — NOT the wrap container,
-      # lip, top, posts, or character.
+      INSTANCED_WRAP_NAME = 'ISOframe Graphic Keyboard Wrap'
+
+      # Definition/instance is the paint wrap if it names Graphic Keyboard Attachment
+      # / Rolable. DC names like "Keyboard Attachment wrap^…Graphic Keyboard…"
+      # MUST match — do not let wrap_container? veto those.
+      def graphic_wrap_definition_name?(name)
+        n = name.to_s
+        return true if n =~ /graphic\s*keyboard\s*attachment/i
+        return true if n =~ /rolable/i && n =~ /graphic|keyboard\s*attachment/i
+        false
+      end
+
       def graphic_wrap_paint_name?(iname, dname)
+        return true if graphic_wrap_definition_name?(iname) || graphic_wrap_definition_name?(dname)
+        return true if iname.to_s == INSTANCED_WRAP_NAME
         return false if wrap_container?(iname, dname)
         return false if lip_name?(iname, dname)
         return false if top_name?(iname, dname)
         n = "#{iname} #{dname}"
         return false if n =~ /\bsree\b|table\s*post|\b763\b|beam|keyboard\s*base/i
-        return true if n =~ /graphic\s*keyboard\s*attachment/i
-        return true if n =~ /rolable/i && n =~ /graphic|keyboard/i
         false
+      end
+
+      def graphic_wrap_skp_path
+        p = MeshImport.model_path(SKP_GRAPHIC_WRAP)
+        return p if File.file?(p)
+        # Dev/store fallback (cloud agent media/).
+        alt = File.expand_path(
+          File.join(File.dirname(__FILE__), '..', '..', '..', '..', 'media', 'tables', SKP_GRAPHIC_WRAP)
+        )
+        return alt if File.file?(alt)
+        p
       end
 
       # Find Graphic Keyboard Attachment (Rolable) inside the table bake.
       def find_graphic_wrap_with_transform(entities, depth, tr)
-        return nil if entities.nil? || depth > 10
+        return nil if entities.nil? || depth > 12
         entities.each do |e|
           next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
           next unless e.valid?
@@ -772,58 +796,176 @@ module ISOframe
         nil
       end
 
-      # Ensure paint target exists: bake → load Keyboard_table_graphic_wrap.skp.
+      # Best ComponentDefinition from loaded wrap SKP / model for paint geometry.
+      def find_best_graphic_wrap_definition(model)
+        best = nil
+        best_score = -1.0
+        model.definitions.each do |d|
+          next unless d && d.valid?
+          next if d.respond_to?(:image?) && d.image?
+          n = d.name.to_s
+          next unless graphic_wrap_definition_name?(n) || n == INSTANCED_WRAP_NAME
+          next if n =~ /ISOframe Wave|Floorspace|LED Flood|Sree/i
+          # Must have some geometry (faces or nested).
+          ents = d.entities
+          faces = ents.grep(Sketchup::Face).size
+          nested = ents.grep(Sketchup::Group).size + ents.grep(Sketchup::ComponentInstance).size
+          next if faces.zero? && nested.zero?
+          score = 0.0
+          score += 50.0 if n =~ /rolable/i
+          score += 40.0 if n =~ /graphic\s*keyboard\s*attachment/i
+          score += 20.0 if n =~ /Keyboard Attachment wrap\^/i
+          score += [faces, 200].min * 0.1
+          score += nested * 0.5
+          # Prefer thinner vertical panel-like defs over huge assemblies.
+          begin
+            bb = d.bounds
+            unless bb.nil? || bb.empty?
+              dx = (bb.max.x - bb.min.x).abs / 1.mm
+              dy = (bb.max.y - bb.min.y).abs / 1.mm
+              dz = (bb.max.z - bb.min.z).abs / 1.mm
+              score += 15.0 if dz >= 50.0 && [dx, dy].min <= 80.0
+              score -= 30.0 if dx > 2000.0 || dy > 2000.0
+            end
+          rescue StandardError
+            nil
+          end
+          if score > best_score
+            best_score = score
+            best = d
+          end
+        end
+        puts "[ISOframe] best wrap def=#{best ? best.name : 'NONE'} score=#{best_score.round(1)}"
+        best
+      end
+
+      # Place wrap under keyboard top, apron-front (viewer side).
+      def wrap_placement_transform_for_bake(table_defn, wrap_def)
+        id = identity_transform
+        wbb = wrap_def.bounds
+        raise 'Wrap definition has empty bounds' if wbb.nil? || wbb.empty?
+
+        wx0 = wbb.min.x
+        wy0 = wbb.min.y
+        wz0 = wbb.min.z
+        wx1 = wbb.max.x
+        wy1 = wbb.max.y
+        wz1 = wbb.max.z
+        wcx = (wx0 + wx1) * 0.5
+        wcy = (wy0 + wy1) * 0.5
+        # Prefer the face of the wrap with larger |Y| extent as "depth"; front = max Y in def.
+        w_front_y = wy1
+        w_top_z = wz1
+
+        target = placement_anchor_under_top(table_defn)
+        tx = target[:cx]
+        ty = target[:front_y]
+        tz = target[:under_z]
+
+        # Move wrap so: center X → tx, front Y → ty, top Z → tz (just under top).
+        Geom::Transformation.translation(
+          Geom::Vector3d.new(tx - wcx, ty - w_front_y, tz - w_top_z)
+        )
+      rescue StandardError => e
+        puts "[ISOframe] wrap pose fallback (#{e.message})"
+        # Bay-ish apron front default in table-local space.
+        Geom::Transformation.translation(
+          Geom::Vector3d.new(Constants::GRAPHIC_BAY_MM.mm * 0.5, 0, 50.mm)
+        )
+      end
+
+      def placement_anchor_under_top(table_defn)
+        id = identity_transform
+        top = find_keyboard_top_with_transform(table_defn.entities, 0, id)
+        anchor = anchor_from_entity(top[0], top[1]) if top && top[0]
+        return anchor if anchor
+
+        geo = find_tabletop_like_container(table_defn)
+        anchor = anchor_from_entity(geo[0], geo[1]) if geo && geo[0]
+        return anchor if anchor
+
+        {
+          cx: Constants::GRAPHIC_BAY_MM.mm * 0.5,
+          front_y: 0.0,
+          under_z: 100.mm
+        }
+      end
+
+      def anchor_from_entity(ent, tr)
+        return nil unless ent && ent.valid?
+        bb = ent.bounds
+        return nil if bb.nil? || bb.empty?
+        tr ||= identity_transform
+        corners = [
+          tr * Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z),
+          tr * Geom::Point3d.new(bb.max.x, bb.min.y, bb.min.z),
+          tr * Geom::Point3d.new(bb.min.x, bb.max.y, bb.min.z),
+          tr * Geom::Point3d.new(bb.max.x, bb.max.y, bb.min.z),
+          tr * Geom::Point3d.new(bb.min.x, bb.min.y, bb.max.z),
+          tr * Geom::Point3d.new(bb.max.x, bb.max.y, bb.max.z)
+        ]
+        xs = corners.map(&:x)
+        ys = corners.map(&:y)
+        zs = corners.map(&:z)
+        {
+          cx: (xs.min + xs.max) * 0.5,
+          front_y: ys.max,
+          under_z: zs.min - 0.5.mm
+        }
+      rescue StandardError
+        nil
+      end
+
+      # Always ensure wrap is in bake: find existing, else load SKP and instance.
       def ensure_graphic_wrap_target!(table_defn, model)
-        return [nil, nil] unless table_defn && table_defn.valid?
+        return [nil, nil] unless table_defn && table_defn.valid? && model
+
+        # 1) Already instanced / nested in this bake.
         hit = find_graphic_wrap_with_transform(table_defn.entities, 0, identity_transform)
         if hit && hit[0]
           mark_as_table_graphic!(hit[0])
-          puts "[ISOframe] graphic wrap target in bake name=#{hit[0].name} def=#{def_name_of(hit[0])}"
+          puts "[ISOframe] graphic wrap already in bake name=#{hit[0].name} def=#{def_name_of(hit[0])}"
           return hit
         end
 
-        path = MeshImport.model_path(SKP_GRAPHIC_WRAP)
+        # 2) Load Keyboard_table_graphic_wrap.skp and instance into bake.
+        path = graphic_wrap_skp_path
         unless File.file?(path)
-          puts "[ISOframe] missing bundled #{SKP_GRAPHIC_WRAP}"
+          puts "[ISOframe] missing #{SKP_GRAPHIC_WRAP} at #{path}"
           return [nil, nil]
         end
+
         root = ensure_skp_imported!(model, path)
-        # Search loaded root / all defs for Graphic Keyboard Attachment.
-        hit = find_graphic_wrap_with_transform(root.entities, 0, identity_transform) if root && root.valid?
-        unless hit && hit[0]
-          model.definitions.each do |d|
-            next if d.respond_to?(:image?) && d.image?
-            next unless graphic_wrap_paint_name?('', d.name.to_s)
-            # Prefer a definition that already has face geometry.
-            next if d.entities.grep(Sketchup::Face).empty? &&
-                    d.entities.grep(Sketchup::Group).empty? &&
-                    d.entities.grep(Sketchup::ComponentInstance).empty?
-            # Instance into table bake if not already present.
-            inst = table_defn.entities.add_instance(d, identity_transform)
-            inst.name = 'ISOframe Graphic Keyboard Wrap' if inst.respond_to?(:name=)
-            mark_as_table_graphic!(inst)
-            puts "[ISOframe] graphic wrap instanced from #{SKP_GRAPHIC_WRAP} def=#{d.name}"
-            return [inst, identity_transform]
+        gdef = find_best_graphic_wrap_definition(model)
+        unless gdef
+          # Last chance: walk loaded root for an instance and take its definition.
+          if root && root.valid?
+            nested = find_graphic_wrap_with_transform(root.entities, 0, identity_transform)
+            if nested && nested[0].is_a?(Sketchup::ComponentInstance)
+              gdef = nested[0].definition
+            elsif nested && nested[0].is_a?(Sketchup::Group)
+              # Can't instance a group def — copy via temporary? Skip.
+              gdef = nil
+            end
           end
         end
-
-        if hit && hit[0]
-          # Wrap SKP root contained the paint target — instance its definition into bake.
-          src = hit[0]
-          src_def = src.is_a?(Sketchup::ComponentInstance) ? src.definition : nil
-          if src_def
-            inst = table_defn.entities.add_instance(src_def, hit[1] || identity_transform)
-            inst.name = 'ISOframe Graphic Keyboard Wrap' if inst.respond_to?(:name=)
-            mark_as_table_graphic!(inst)
-            puts "[ISOframe] graphic wrap copied from #{SKP_GRAPHIC_WRAP}"
-            return [inst, hit[1] || identity_transform]
-          end
-          mark_as_table_graphic!(src)
-          return hit
+        unless gdef && gdef.valid?
+          puts '[ISOframe] no Graphic Keyboard wrap definition in wrap SKP'
+          return [nil, nil]
         end
 
-        puts '[ISOframe] graphic wrap target NOT FOUND'
-        [nil, nil]
+        local = wrap_placement_transform_for_bake(table_defn, gdef)
+        inst = table_defn.entities.add_instance(gdef, local)
+        inst.name = INSTANCED_WRAP_NAME if inst.respond_to?(:name=)
+        mark_as_table_graphic!(inst)
+        begin
+          inst.set_attribute('ISOframe', 'graphic_wrap_instanced', true)
+        rescue StandardError
+          nil
+        end
+        puts "[ISOframe] INSTANCED wrap from #{File.basename(path)} def=#{gdef.name} " \
+             "origin=#{local.origin}"
+        [inst, local]
       rescue StandardError => e
         puts "[ISOframe] ensure_graphic_wrap_target! failed: #{e.message}"
         [nil, nil]

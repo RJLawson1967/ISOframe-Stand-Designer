@@ -37,6 +37,8 @@
 # v0.1.67: “2500 faces” was apron fallback. Remove it. Table wrap now calls the
 # same ensure_* texture + paint_front_face! path as wall wallpaper; make_unique
 # nested defs; prove face.material.texture non-nil; dialog reports tex size.
+# v0.1.68: bake never contains Rolable wrap (Boss-Extrude only) — always instance
+# Keyboard_table_graphic_wrap.skp into bake on place + apply before paint.
 
 module ISOframe
   module StandDesigner
@@ -316,15 +318,16 @@ module ISOframe
         wrap, _wrap_tr = Tables.ensure_graphic_wrap_target!(defn, table_inst.model)
         unless wrap && wrap.valid?
           dump = Tables.dump_baked_entity_names(defn.entities, 0)
-          raise 'No Graphic Keyboard Attachment (Rolable) wrap found. ' \
-                'Toggle Keyboard Table off/on once (v67 bake), then try again. ' \
+          raise 'Could not instance Keyboard_table_graphic_wrap.skp into the table bake. ' \
+                'Confirm the plugin models folder includes that SKP, then toggle ' \
+                'Keyboard Table off/on (v68 bake). ' \
                 "bake=#{dump}"
         end
 
         prep = Tables.prepare_graphic_wrap_for_paint!(wrap)
         unless prep && prep[:faces] && !prep[:faces].empty?
           raise 'Graphic wrap has no outward front faces to paint. ' \
-                'Toggle Keyboard Table off/on (v67), then try again.'
+                'Toggle Keyboard Table off/on (v68), then try again.'
         end
         faces = prep[:faces]
         if faces.size > 500
