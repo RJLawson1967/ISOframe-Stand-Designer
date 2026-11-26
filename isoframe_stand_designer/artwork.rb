@@ -14,6 +14,10 @@
 # (fixes ~146k per-face tiling).
 # v0.1.60: lip IS the apron (top is separate SKP). Stop Z-span≤17mm filter that
 # zeroed tessellated lip facets; keep continuous UV + wall front-only.
+# v0.1.61: table apron — bake-root transform + never-empty lip/safe fallback.
+# Wall — restore v0.1.58 texture/UV paint path; clear rear faces after (front
+# photo, rear plain). v0.1.59 outward-only + back_material=nil caused solid
+# light-blue both sides.
 
 module ISOframe
   module StandDesigner
@@ -278,13 +282,16 @@ module ISOframe
           nil
         end
 
-        # v0.1.59: lip apron only + one continuous UV (not ~146k tiled faces).
+        # v0.1.61: lip/apron via bake-root transform; continuous UV; never wrap/146k.
         Tables.purge_synthetic_table_graphic_panels!(defn)
+        Tables.mark_table_graphic_targets!(defn)
         lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
         apron = Tables.select_keyboard_apron_faces(defn)
         if apron.empty?
+          dump = Tables.dump_baked_entity_names(defn.entities, 0)
           raise 'No under-table apron faces found on the keyboard lip. ' \
-                'Toggle Keyboard Table off/on once, then try Apply Table Artwork again.'
+                'Toggle Keyboard Table off/on once (v61 bake), then try again. ' \
+                "lip=#{lip ? lip.name : 'NONE'} bake=#{dump}"
         end
         if apron.size > 8000
           raise "Apron face filter too broad (#{apron.size} faces). " \
@@ -807,16 +814,23 @@ module ISOframe
         end
       end
 
-      # Paint FRONT facets only (outward toward floorspace). Rear faces toward
-      # the framework / flex-link stay unpainted (v0.1.59).
+      # Paint FRONT wallpaper with the proven v0.1.58 UV path, then clear rear
+      # faces (toward flex-link). v0.1.59 painted only outward faces with
+      # back_material=nil and produced solid light-blue both sides.
       def map_graphic_group!(group, material, bay_index, bay_count, height_mm, flex_angle_deg = 0.0)
         faces = group.entities.grep(Sketchup::Face).select { |f| f.valid? }
         path = bay_front_path(flex_angle_deg)
-        front = select_front_panel_faces(faces, path)
-        return 0 if front.empty?
+        # Large vertical faces (same as v0.1.58) — includes front + rear slabs.
+        vertical = select_vertical_panel_faces(faces)
+        return 0 if vertical.empty?
 
-        # Clear wallpaper from rear/side faces so old double-sided paint is gone.
-        clear_non_front_wall_materials!(faces, front)
+        front, rear = partition_front_rear_faces(vertical, path)
+        # If outward test fails (odd transforms), paint all vertical then clear
+        # faces whose normal opposes the path left-normal.
+        if front.empty?
+          front = vertical
+          rear = []
+        end
 
         bay_w = Constants::GRAPHIC_BAY_MM.mm
         tex_w, tex_h = texture_dims(material, bay_w, height_mm.to_f.mm)
@@ -831,6 +845,13 @@ module ISOframe
         front.each do |face|
           painted += 1 if paint_front_face!(face, material, u0, u1, h, path, cum, total)
         end
+
+        # Rear of the 3mm panel stays plain (no wallpaper).
+        clear_wall_face_materials!(rear)
+        clear_wall_face_materials!(faces - front - rear) if rear.empty?
+        # When we had an explicit rear set, also clear any remaining non-front.
+        clear_non_front_wall_materials!(faces, front) unless rear.empty?
+
         painted
       end
 
@@ -913,18 +934,58 @@ module ISOframe
         Geom::Point3d.new(u, v, 0)
       end
 
-      # Front = outward toward viewer/floorspace (left-normal of bay path).
-      # Rear slab faces (≈ opposite normal, toward flex-link) are excluded.
-      def select_front_panel_faces(faces, path = nil)
-        path ||= bay_front_path(0.0)
+      # v0.1.58-compatible: all large vertical panel faces (front + rear).
+      def select_vertical_panel_faces(faces)
         faces.select do |f|
           next false unless f.valid?
           n = f.normal
           next false if n.z.abs >= 0.40
-          next false if face_area_mm2(f) < MIN_FRONT_AREA_MM2
+          face_area_mm2(f) >= MIN_FRONT_AREA_MM2
+        end
+      end
+
+      # Front = outward toward floorspace; rear = opposite (flex-link side).
+      def partition_front_rear_faces(faces, path = nil)
+        path ||= bay_front_path(0.0)
+        front = []
+        rear = []
+        faces.each do |f|
+          next unless f.valid?
           outward = front_outward_normal_at(f.bounds.center, path)
-          next false if outward.nil?
-          n.dot(outward) > 0.25
+          if outward.nil?
+            front << f
+            next
+          end
+          dot = f.normal.dot(outward)
+          if dot > 0.15
+            front << f
+          elsif dot < -0.15
+            rear << f
+          else
+            # Side/edge strips — leave unpainted.
+            rear << f
+          end
+        end
+        [front, rear]
+      end
+
+      # Kept for table helpers / older call sites.
+      def select_front_panel_faces(faces, path = nil)
+        vertical = select_vertical_panel_faces(faces)
+        return vertical if path.nil?
+        front, _rear = partition_front_rear_faces(vertical, path)
+        front.empty? ? vertical : front
+      end
+
+      def clear_wall_face_materials!(faces)
+        faces.each do |f|
+          next unless f && f.valid?
+          begin
+            f.material = nil
+            f.back_material = nil
+          rescue StandardError
+            nil
+          end
         end
       end
 
@@ -987,13 +1048,10 @@ module ISOframe
       end
 
       def paint_front_face!(face, material, u0, u1, h, path, cum, total)
+        # Restore v0.1.58: set BOTH face materials so thin-panel texture displays
+        # reliably; rear slab faces are cleared separately after mapping.
         face.material = material
-        # Do not paint the reverse side of the front face (into panel thickness).
-        begin
-          face.back_material = nil
-        rescue StandardError
-          nil
-        end
+        face.back_material = material
         verts = face.outer_loop.vertices.map(&:position)
         return material_only_ok?(face, material) if verts.size < 3
 
@@ -1002,7 +1060,7 @@ module ISOframe
       rescue StandardError
         begin
           face.material = material
-          face.back_material = nil
+          face.back_material = material
         rescue StandardError
           nil
         end

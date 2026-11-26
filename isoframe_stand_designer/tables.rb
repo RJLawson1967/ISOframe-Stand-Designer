@@ -35,6 +35,9 @@
 # separate "keyboard top"). Per-face Z-span≤17mm rejected tessellated apron
 # facets. Select lip faces excluding only near-horizontals; top/edge stay on
 # the top component (never painted).
+# v0.1.61: live apply still empty — lip-local normals / missing lip / no fallback.
+# Resolve lip with path transform into bake-root (Z-up); never return empty when
+# lip (or safe apron container) has faces; paint continuous UV; never whole wrap.
 
 module ISOframe
   module StandDesigner
@@ -46,8 +49,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v59 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v60',
+          # Fresh name so dealers drop any cached v43–v60 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v61',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -1085,49 +1088,230 @@ module ISOframe
         nil
       end
 
-      # Apron faces: ONLY the keyboard lip component (the apron).
+      # Apron faces for Apply Table Artwork (live bake path).
       # Tabletop + 15mm edge live on separate "keyboard top" — never selected here.
-      # v0.1.59 bug: treated lip Z-range as including a 15mm top and rejected every
-      # tessellated facet with Z-span ≤ 17mm → zero faces for Richard.
+      # v0.1.61: resolve lip with bake-root transforms (orientation lives on wrap
+      # instance). Prefer non-horizontal in root Z-up; if that empties, keep ALL
+      # lip faces. Safe fallback skips wrap/character/posts/top — never 146k.
       def select_keyboard_apron_faces(defn)
         return [] unless defn && defn.valid?
-        lip = find_keyboard_lip_entity(defn.entities, 0)
-        unless lip && lip.valid?
-          puts '[ISOframe] select_keyboard_apron_faces: lip entity not found'
-          return []
+        samples = apron_face_samples(defn)
+        return [] if samples.empty?
+
+        vertical = samples.select do |s|
+          s[:face].valid? && s[:nz].abs < 0.85 && s[:area_mm2] >= 0.5
+        end
+        chosen = vertical
+        if chosen.empty?
+          # Lip IS the apron — paint whatever faces it has (continuous UV).
+          chosen = samples.select { |s| s[:face].valid? && s[:area_mm2] >= 0.01 }
+          puts "[ISOframe] apron fallback ALL target faces count=#{chosen.size}"
+        end
+        if chosen.size > 8000
+          chosen = chosen.sort_by { |s| -s[:area_mm2] }.first(2500)
+          puts "[ISOframe] apron capped to #{chosen.size} largest faces"
+        end
+        faces = chosen.map { |s| s[:face] }
+        puts "[ISOframe] apron selected=#{faces.size} raw_samples=#{samples.size}"
+        faces
+      end
+
+      # Samples with bake-root normals (nz) for filtering + local face refs for UV.
+      def apron_face_samples(defn)
+        target, tr = resolve_apron_target_with_transform(defn)
+        samples = []
+        id = identity_transform
+        if target && target.valid?
+          gather_face_samples!(target, samples, 0, tr || id)
+          puts "[ISOframe] apron target raw faces=#{samples.size} " \
+               "name=#{target.name} def=#{target.respond_to?(:definition) ? target.definition.name : '-'}"
+        else
+          puts '[ISOframe] select_keyboard_apron_faces: lip/apron target not found — safe walk'
+        end
+        if samples.empty?
+          gather_safe_apron_samples!(defn.entities, samples, 0, id, '')
+          puts "[ISOframe] apron safe-walk faces=#{samples.size}"
+        end
+        samples
+      end
+
+      def identity_transform
+        @identity_transform ||= Geom::Transformation.new
+      end
+
+      def resolve_apron_target_with_transform(defn)
+        id = identity_transform
+        hit = find_keyboard_lip_with_transform(defn.entities, 0, id)
+        return hit if hit && hit[0]
+
+        marked = find_marked_table_graphic(defn.entities, 0)
+        if marked && marked.valid? && !wrap_container?(marked.name.to_s, def_name_of(marked))
+          tr = find_entity_transform(defn.entities, marked, 0, id)
+          return [marked, tr || id]
         end
 
-        faces = []
-        gather_faces_deep!(lip, faces, 0)
-        puts "[ISOframe] lip raw faces=#{faces.size} " \
-             "name=#{lip.name} def=#{lip.respond_to?(:definition) ? lip.definition.name : '-'}"
-        return [] if faces.empty?
+        # Nested "Graphic Keyboard Attachment (Rolable)" child — not the wrap itself.
+        hit = find_apron_like_nested(defn.entities, 0, id)
+        return hit if hit && hit[0]
 
-        up = detect_lip_up_axis(faces)
-        selected = filter_lip_apron_faces(faces, up)
-        # Fallback: any non-horizontal lip face (still lip-only — not wrap/146k).
-        if selected.empty?
-          selected = faces.select do |f|
-            next false unless f.valid?
-            n_up = normal_up_component(f.normal, up)
-            n_up.abs < 0.92 && face_area_mm2_local(f) >= 0.5
+        [nil, nil]
+      end
+
+      def find_keyboard_lip_with_transform(entities, depth, tr)
+        return nil if entities.nil? || depth > 8
+        entities.each do |e|
+          next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+          next unless e.valid?
+          next if synthetic_table_graphic?(e)
+          iname = e.name.to_s
+          dname = def_name_of(e)
+          local = tr * e.transformation
+          if lip_name?(iname, dname) && !wrap_container?(iname, dname)
+            return [e, local]
           end
-          puts "[ISOframe] apron fallback non-horizontal count=#{selected.size}"
+          child_ents = e.is_a?(Sketchup::Group) ? e.entities : e.definition.entities
+          nested = find_keyboard_lip_with_transform(child_ents, depth + 1, local)
+          return nested if nested
         end
-        # Cap runaway tessellation but keep continuous UV viable.
-        if selected.size > 8000
-          selected = selected.sort_by { |f| -face_area_mm2_local(f) }.first(2500)
-          puts "[ISOframe] apron capped to #{selected.size} largest faces"
+        nil
+      end
+
+      def find_apron_like_nested(entities, depth, tr)
+        return nil if entities.nil? || depth > 8
+        entities.each do |e|
+          next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+          next unless e.valid?
+          iname = e.name.to_s
+          dname = def_name_of(e)
+          local = tr * e.transformation
+          if apron_like_name?(iname, dname) && !wrap_container?(iname, dname)
+            return [e, local]
+          end
+          child_ents = e.is_a?(Sketchup::Group) ? e.entities : e.definition.entities
+          nested = find_apron_like_nested(child_ents, depth + 1, local)
+          return nested if nested
         end
-        puts "[ISOframe] apron selected=#{selected.size} up_axis=#{up}"
-        selected
+        nil
+      end
+
+      def apron_like_name?(iname, dname)
+        n = "#{iname} #{dname}"
+        return true if lip_name?(iname, dname)
+        # Nested DC graphic title — only when not the wrap container.
+        !!(n =~ /graphic\s*keyboard\s*attachment/i || n =~ /\brolable\b/i)
+      end
+
+      def find_entity_transform(entities, target, depth, tr)
+        return nil if entities.nil? || depth > 8
+        entities.each do |e|
+          next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+          next unless e.valid?
+          local = tr * e.transformation
+          return local if e == target || (e.respond_to?(:entityID) && target.respond_to?(:entityID) && e.entityID == target.entityID)
+          child_ents = e.is_a?(Sketchup::Group) ? e.entities : e.definition.entities
+          hit = find_entity_transform(child_ents, target, depth + 1, local)
+          return hit if hit
+        end
+        nil
+      end
+
+      def gather_face_samples!(entity_or_entities, out, depth, tr)
+        return if depth > 8
+        ents = entities_of(entity_or_entities)
+        return if ents.nil?
+        ents.each do |e|
+          if e.is_a?(Sketchup::Face) && e.valid?
+            n = transform_as_normal(e.normal, tr)
+            out << {
+              face: e,
+              nx: n.x.to_f, ny: n.y.to_f, nz: n.z.to_f,
+              area_mm2: face_area_mm2_local(e),
+              points_root: e.outer_loop.vertices.map { |v| tr * v.position }
+            }
+          elsif e.is_a?(Sketchup::Group) && e.valid?
+            gather_face_samples!(e, out, depth + 1, tr * e.transformation)
+          elsif e.is_a?(Sketchup::ComponentInstance) && e.valid?
+            gather_face_samples!(e, out, depth + 1, tr * e.transformation)
+          end
+        end
+      end
+
+      # Walk bake: always descend into wrap; skip posts/feet/character/top/base.
+      # Skip faces whose parent path is wrap without lip (character mesh).
+      def gather_safe_apron_samples!(entities, out, depth, tr, parent_key)
+        return if entities.nil? || depth > 8
+        entities.each do |e|
+          if e.is_a?(Sketchup::Face) && e.valid?
+            next if skip_apron_face_parent?(parent_key)
+            n = transform_as_normal(e.normal, tr)
+            next if n.z.abs >= 0.92
+            area = face_area_mm2_local(e)
+            next if area < 1.0
+            out << {
+              face: e,
+              nx: n.x.to_f, ny: n.y.to_f, nz: n.z.to_f,
+              area_mm2: area,
+              points_root: e.outer_loop.vertices.map { |v| tr * v.position }
+            }
+          elsif e.is_a?(Sketchup::Group) && e.valid?
+            key = "#{parent_key} #{e.name}"
+            next if blocked_apron_descend?(key)
+            gather_safe_apron_samples!(e.entities, out, depth + 1, tr * e.transformation, key)
+          elsif e.is_a?(Sketchup::ComponentInstance) && e.valid?
+            key = "#{parent_key} #{e.name} #{e.definition.name}"
+            next if blocked_apron_descend?(key)
+            gather_safe_apron_samples!(e.definition.entities, out, depth + 1, tr * e.transformation, key)
+          end
+        end
+        out.replace(out.sort_by { |s| -s[:area_mm2] }.first(2500)) if out.size > 8000
+      end
+
+      def blocked_apron_descend?(key)
+        k = key.to_s
+        !!(k =~ /table\s*post|\b763\b|beam\s*straight|adjustable\s*foot|base\s*support|flexibeam|post\s*[ab]\b|\bsree\b|keyboard\s*top|keyboard\s*base/i)
+      end
+
+      def skip_apron_face_parent?(key)
+        return true if blocked_apron_descend?(key)
+        k = key.to_s
+        # Character / loose wrap faces: under wrap but not under lip.
+        if k =~ /attachment\s*wrap|ISOframe Keyboard Attachment/i && k !~ /keyboard\s*lip/i
+          return true
+        end
+        false
+      end
+
+      def entities_of(entity_or_entities)
+        if entity_or_entities.is_a?(Sketchup::Group)
+          entity_or_entities.entities
+        elsif entity_or_entities.is_a?(Sketchup::ComponentInstance)
+          entity_or_entities.definition.entities
+        elsif entity_or_entities.respond_to?(:grep)
+          entity_or_entities
+        elsif entity_or_entities.respond_to?(:entities)
+          entity_or_entities.entities
+        end
+      end
+
+      def transform_as_normal(normal, tr)
+        # Transform as a direction (no translation).
+        p0 = tr * Geom::Point3d.new(0, 0, 0)
+        p1 = tr * Geom::Point3d.new(normal.x.to_f, normal.y.to_f, normal.z.to_f)
+        Geom::Vector3d.new(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z)
+      rescue StandardError
+        normal
+      end
+
+      def def_name_of(ent)
+        ent.respond_to?(:definition) ? ent.definition.name.to_s : ''
+      rescue StandardError
+        ''
       end
 
       def filter_lip_apron_faces(faces, up)
         faces.select do |f|
           next false unless f.valid?
           n_up = normal_up_component(f.normal, up)
-          # Exclude only near-horizontal faces (lip floor/ceiling rims if any).
           next false if n_up.abs >= 0.85
           face_area_mm2_local(f) >= 0.5
         end
@@ -1175,15 +1359,7 @@ module ISOframe
 
       def gather_faces_deep!(entity_or_entities, out, depth)
         return if depth > 8
-        ents = if entity_or_entities.is_a?(Sketchup::Group)
-                 entity_or_entities.entities
-               elsif entity_or_entities.is_a?(Sketchup::ComponentInstance)
-                 entity_or_entities.definition.entities
-               elsif entity_or_entities.respond_to?(:grep)
-                 entity_or_entities
-               elsif entity_or_entities.respond_to?(:entities)
-                 entity_or_entities.entities
-               end
+        ents = entities_of(entity_or_entities)
         return if ents.nil?
         ents.each do |e|
           if e.is_a?(Sketchup::Face) && e.valid?
@@ -1204,16 +1380,10 @@ module ISOframe
         !select_keyboard_apron_faces(defn).empty?
       end
 
-      # Pure helper for tests: given lip-local face samples, return how many pass.
-      # samples: array of hashes { nx:, ny:, nz:, area_mm2:, z_span_mm: }
-      def count_apron_samples_passing(samples, up_axis = 2)
+      # Pure helper for tests: bake-root samples { nx:, ny:, nz:, area_mm2: }.
+      def count_apron_samples_passing(samples, _up_axis = 2)
         samples.count do |s|
-          n_up = case up_axis
-                 when 0 then s[:nx].to_f
-                 when 1 then s[:ny].to_f
-                 else s[:nz].to_f
-                 end
-          next false if n_up.abs >= 0.85
+          next false if s[:nz].to_f.abs >= 0.85
           s[:area_mm2].to_f >= 0.5
         end
       end
@@ -1233,38 +1403,30 @@ module ISOframe
         end
       end
 
+      # Simulate v0.1.61: vertical-or-all under a lip target (never empty if faces exist).
+      def count_apron_samples_passing_v61(samples)
+        return 0 if samples.empty?
+        vertical = samples.count { |s| s[:nz].to_f.abs < 0.85 && s[:area_mm2].to_f >= 0.5 }
+        return vertical if vertical > 0
+        samples.count { |s| s[:area_mm2].to_f >= 0.01 }
+      end
+
       def skip_container_for_apron?(key)
         k = key.to_s
-        !!(k =~ /table\s*post|\b763\b|beam\s*straight|adjustable\s*foot|base\s*support|flexibeam|post\s*[ab]\b|sree|keyboard\s*top|attachment\s*wrap/i)
+        !!(k =~ /table\s*post|\b763\b|beam\s*straight|adjustable\s*foot|base\s*support|flexibeam|post\s*[ab]\b|sree|keyboard\s*top|keyboard\s*base|attachment\s*wrap/i)
       end
 
       # Never treat the wrap itself as the paint target (would include character mesh).
       def wrap_container?(iname, dname)
         n = "#{iname} #{dname}"
-        !!(n =~ /attachment\s*wrap/i || n =~ /Keyboard Attachment wrap/i)
+        !!(n =~ /attachment\s*wrap/i || n =~ /Keyboard Attachment wrap/i ||
+           n =~ /ISOframe Keyboard Attachment/i)
       end
 
       # Walk baked table for "keyboard lip" / Table Attachment Keyboard Lip.
       def find_keyboard_lip_entity(entities, depth)
-        return nil if entities.nil? || depth > 8
-        entities.each do |e|
-          if e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
-            next unless e.valid?
-            next if synthetic_table_graphic?(e)
-            iname = e.name.to_s
-            dname = e.respond_to?(:definition) ? e.definition.name.to_s : ''
-            if lip_name?(iname, dname)
-              return e
-            end
-            nested = if e.is_a?(Sketchup::Group)
-                       find_keyboard_lip_entity(e.entities, depth + 1)
-                     else
-                       find_keyboard_lip_entity(e.definition.entities, depth + 1)
-                     end
-            return nested if nested
-          end
-        end
-        nil
+        hit = find_keyboard_lip_with_transform(entities, depth, identity_transform)
+        hit ? hit[0] : nil
       end
 
       def find_keyboard_top_entity(entities, depth)
