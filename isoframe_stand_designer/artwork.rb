@@ -12,6 +12,8 @@
 # v0.1.59: wall wallpaper FRONT faces only (rear toward flex-link unpainted).
 # Keyboard apron: lip-only faces under 15mm top + continuous cylindrical UV
 # (fixes ~146k per-face tiling).
+# v0.1.60: lip IS the apron (top is separate SKP). Stop Z-span≤17mm filter that
+# zeroed tessellated lip facets; keep continuous UV + wall front-only.
 
 module ISOframe
   module StandDesigner
@@ -339,7 +341,7 @@ module ISOframe
         [w_mm, h_mm]
       end
 
-      # Continuous cylindrical unwrap: U = angle around apron center, V = Z.
+      # Continuous unwrap in lip-local space: U = angle in horizontal plane, V = up.
       def paint_apron_continuous!(faces, material)
         return 0 if faces.nil? || faces.empty?
         frame = apron_uv_frame(faces)
@@ -351,7 +353,11 @@ module ISOframe
             verts = face.outer_loop.vertices.map(&:position)
             next if verts.size < 3
             face.material = material
-            face.back_material = material
+            begin
+              face.back_material = nil
+            rescue StandardError
+              nil
+            end
             mapping = apron_uv_mapping(verts, frame, tex_w, tex_h)
             if mapping
               begin
@@ -377,17 +383,23 @@ module ISOframe
         end
         raise 'No apron vertices for UV' if pts.empty?
 
-        cx = pts.map(&:x).inject(0.0, :+) / pts.size
-        cy = pts.map(&:y).inject(0.0, :+) / pts.size
-        zs = pts.map { |p| p.z.to_f }
-        z0 = zs.min
-        z1 = zs.max
-        height = [z1 - z0, 1.0.mm].max
+        up = Tables.detect_lip_up_axis(faces)
+        # Horizontal plane axes for angle unwrap.
+        h0, h1 = case up
+                 when 0 then [1, 2] # YZ plane → use y,z
+                 when 1 then [0, 2] # XZ
+                 else [0, 1]       # XY (up = Z)
+                 end
 
-        angles = pts.map { |p| Math.atan2(p.y - cy, p.x - cx) }
-        # Unwrap angles onto a continuous interval covering the apron arc.
+        c0 = pts.map { |p| point_comp(p, h0) }.inject(0.0, :+) / pts.size
+        c1 = pts.map { |p| point_comp(p, h1) }.inject(0.0, :+) / pts.size
+        ups = pts.map { |p| point_comp(p, up) }
+        u0 = ups.min
+        u1 = ups.max
+        height = [(u1 - u0).abs, 1.0.mm].max
+
+        angles = pts.map { |p| Math.atan2(point_comp(p, h1) - c1, point_comp(p, h0) - c0) }
         a_sorted = angles.sort
-        # Use min..max span; for D-counter facing +Y, angles cluster around π/2.
         a0 = a_sorted.first
         a1 = a_sorted.last
         span = a1 - a0
@@ -396,37 +408,49 @@ module ISOframe
           a0 = -Math::PI
           a1 = Math::PI
         end
-        # Mean radius for developed width.
-        radii = pts.map { |p| Math.hypot(p.x - cx, p.y - cy) }
+        radii = pts.map do |p|
+          Math.hypot(point_comp(p, h0) - c0, point_comp(p, h1) - c1)
+        end
         r = radii.inject(0.0, :+) / radii.size
         r = 100.mm if r < 1.mm
         arc_len = r * span.abs
 
         {
-          cx: cx, cy: cy, z0: z0, z1: z1,
+          up: up, h0: h0, h1: h1,
+          c0: c0, c1: c1, v0: u0, v1: u1,
           a0: a0, a1: a1, span: span,
           radius: r, arc_len: arc_len, height: height
         }
       end
 
-      def apron_uv_mapping(verts, frame, tex_w, tex_h)
-        # Pick 3 verts with good spread in (angle, z) for position_material.
-        scored = verts.map do |p|
-          ang = Math.atan2(p.y - frame[:cy], p.x - frame[:cx])
-          [p, ang, p.z.to_f]
+      def point_comp(p, axis)
+        case axis
+        when 0 then p.x.to_f
+        when 1 then p.y.to_f
+        else p.z.to_f
         end
-        return nil if scored.size < 3
-        # Prefer extreme U and V samples.
+      end
+
+      def apron_uv_mapping(verts, frame, tex_w, tex_h)
+        scored = verts.map do |p|
+          ang = Math.atan2(
+            point_comp(p, frame[:h1]) - frame[:c1],
+            point_comp(p, frame[:h0]) - frame[:c0]
+          )
+          upv = point_comp(p, frame[:up])
+          [p, ang, upv]
+        end
+        return nil if scored.size < 2
         a = scored.min_by { |(_, ang, _)| ang }
         b = scored.max_by { |(_, ang, _)| ang }
-        c = scored.max_by { |(_, _, z)| (z - frame[:z0]).abs }
+        c = scored.max_by { |(_, _, z)| (z - frame[:v0]).abs }
         trio = [a, b, c].uniq { |t| t[0] }
         return nil if trio.size < 2
 
         mapping = []
-        trio.first(3).each do |p, ang, z|
+        trio.first(3).each do |p, ang, upv|
           u = apron_u(ang, frame, tex_w)
-          v = apron_v(z, frame, tex_h)
+          v = apron_v(upv, frame, tex_h)
           mapping << p
           mapping << Geom::Point3d.new(u, v, 0)
         end
@@ -442,41 +466,22 @@ module ISOframe
         frac * tex_w
       end
 
-      def apron_v(z, frame, tex_h)
+      def apron_v(up_val, frame, tex_h)
         h = frame[:height]
         return 0.0 if h < 1e-9
-        frac = (z.to_f - frame[:z0]) / h
+        frac = (up_val.to_f - frame[:v0]) / h
         frac = 0.0 if frac < 0.0
         frac = 1.0 if frac > 1.0
         frac * tex_h
       end
 
-      # Kept for older call sites / reapply — redirects to apron-only continuous paint.
       def map_table_lip_faces!(lip, material)
         return 0 unless lip && lip.valid?
-        # Build a temporary def-like selection from lip only.
         faces = []
         Tables.gather_faces_deep!(lip, faces, 0)
-        # Re-filter with tabletop rules using lip Z range.
-        zs = []
-        faces.each do |f|
-          f.outer_loop.vertices.each { |v| zs << v.position.z.to_f }
-        rescue StandardError
-          nil
-        end
-        return 0 if zs.empty?
-        z_max = zs.max
-        top_cut = z_max - Tables::TABLETOP_THICKNESS_MM.mm
-        edge_max_h = (Tables::TABLETOP_THICKNESS_MM + 2.0).mm
-        apron = faces.select do |f|
-          next false unless f.valid?
-          next false if f.normal.z.abs >= 0.50
-          vz = f.outer_loop.vertices.map { |v| v.position.z.to_f }
-          span = vz.max - vz.min
-          next false if span <= edge_max_h + 1e-6
-          next false if vz.min >= top_cut - 1e-6
-          face_area_mm2(f) >= 50.0
-        end
+        up = Tables.detect_lip_up_axis(faces)
+        apron = Tables.filter_lip_apron_faces(faces, up)
+        apron = faces.select { |f| f.valid? && Tables.normal_up_component(f.normal, up).abs < 0.92 } if apron.empty?
         paint_apron_continuous!(apron, material)
       end
 

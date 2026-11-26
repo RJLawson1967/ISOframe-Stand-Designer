@@ -31,6 +31,10 @@
 # v0.1.59: apron-only + continuous UV. v0.1.58 painted ~146k faces (whole wrap /
 # character mesh) with per-face tiling and hit the 15mm tabletop edge. Paint only
 # keyboard-lip apron faces under the top; one developed UV across the curve.
+# v0.1.60: v0.1.59 found ZERO apron faces — lip SKP is the apron alone (top is a
+# separate "keyboard top"). Per-face Z-span≤17mm rejected tessellated apron
+# facets. Select lip faces excluding only near-horizontals; top/edge stay on
+# the top component (never painted).
 
 module ISOframe
   module StandDesigner
@@ -42,8 +46,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v58 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v59',
+          # Fresh name so dealers drop any cached v43–v59 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v60',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -1081,50 +1085,92 @@ module ISOframe
         nil
       end
 
-      # Apron faces for artwork: ONLY inside keyboard lip, under the 15mm top.
+      # Apron faces: ONLY the keyboard lip component (the apron).
+      # Tabletop + 15mm edge live on separate "keyboard top" — never selected here.
+      # v0.1.59 bug: treated lip Z-range as including a 15mm top and rejected every
+      # tessellated facet with Z-span ≤ 17mm → zero faces for Richard.
       def select_keyboard_apron_faces(defn)
         return [] unless defn && defn.valid?
         lip = find_keyboard_lip_entity(defn.entities, 0)
-        return [] unless lip && lip.valid?
+        unless lip && lip.valid?
+          puts '[ISOframe] select_keyboard_apron_faces: lip entity not found'
+          return []
+        end
 
         faces = []
         gather_faces_deep!(lip, faces, 0)
+        puts "[ISOframe] lip raw faces=#{faces.size} " \
+             "name=#{lip.name} def=#{lip.respond_to?(:definition) ? lip.definition.name : '-'}"
         return [] if faces.empty?
 
-        zs = []
-        faces.each do |f|
-          f.outer_loop.vertices.each { |v| zs << v.position.z.to_f }
-        rescue StandardError
-          nil
+        up = detect_lip_up_axis(faces)
+        selected = filter_lip_apron_faces(faces, up)
+        # Fallback: any non-horizontal lip face (still lip-only — not wrap/146k).
+        if selected.empty?
+          selected = faces.select do |f|
+            next false unless f.valid?
+            n_up = normal_up_component(f.normal, up)
+            n_up.abs < 0.92 && face_area_mm2_local(f) >= 0.5
+          end
+          puts "[ISOframe] apron fallback non-horizontal count=#{selected.size}"
         end
-        return [] if zs.empty?
-        z_min = zs.min
-        z_max = zs.max
-        top_cut = z_max - TABLETOP_THICKNESS_MM.mm
-        edge_max_h = (TABLETOP_THICKNESS_MM + 2.0).mm
+        # Cap runaway tessellation but keep continuous UV viable.
+        if selected.size > 8000
+          selected = selected.sort_by { |f| -face_area_mm2_local(f) }.first(2500)
+          puts "[ISOframe] apron capped to #{selected.size} largest faces"
+        end
+        puts "[ISOframe] apron selected=#{selected.size} up_axis=#{up}"
+        selected
+      end
 
+      def filter_lip_apron_faces(faces, up)
         faces.select do |f|
           next false unless f.valid?
+          n_up = normal_up_component(f.normal, up)
+          # Exclude only near-horizontal faces (lip floor/ceiling rims if any).
+          next false if n_up.abs >= 0.85
+          face_area_mm2_local(f) >= 0.5
+        end
+      end
+
+      # Axis with the most near-horizontal face area = tabletop/rim "up" in lip space.
+      def detect_lip_up_axis(faces)
+        scores = [0.0, 0.0, 0.0]
+        faces.each do |f|
+          next unless f.valid?
           n = f.normal
-          # Exclude tabletop top/bottom (near-horizontal).
-          next false if n.z.abs >= 0.50
-          begin
-            vz = f.outer_loop.vertices.map { |v| v.position.z.to_f }
-            next false if vz.empty?
-            f_zmin = vz.min
-            f_zmax = vz.max
-            span = f_zmax - f_zmin
-            # Exclude ~15mm-tall tabletop edge strip.
-            next false if span <= edge_max_h + 1e-6
-            # Apron lives under the tabletop band.
-            next false if f_zmin >= top_cut - 1e-6
-            # Keep meaningful facets (not dust).
-            next false if (f.area.to_f * 25.4 * 25.4) < 50.0
-            true
+          area = begin
+            f.area.to_f
           rescue StandardError
-            false
+            0.0
+          end
+          ax = n.x.abs
+          ay = n.y.abs
+          az = n.z.abs
+          if ax >= 0.85 && ax >= ay && ax >= az
+            scores[0] += area
+          elsif ay >= 0.85 && ay >= ax && ay >= az
+            scores[1] += area
+          elsif az >= 0.85
+            scores[2] += area
           end
         end
+        best = scores.each_with_index.max_by { |s, _i| s }
+        (best && best[0] > 0.0) ? best[1] : 2
+      end
+
+      def normal_up_component(normal, up_axis)
+        case up_axis
+        when 0 then normal.x.to_f
+        when 1 then normal.y.to_f
+        else normal.z.to_f
+        end
+      end
+
+      def face_area_mm2_local(face)
+        face.area.to_f * 25.4 * 25.4
+      rescue StandardError
+        0.0
       end
 
       def gather_faces_deep!(entity_or_entities, out, depth)
@@ -1150,13 +1196,41 @@ module ISOframe
         end
       end
 
-      # Legacy name used by older artwork — now lip-apron only (not whole wrap).
       def collect_apron_faces_from_definition(defn)
         select_keyboard_apron_faces(defn)
       end
 
       def baked_table_has_apron_faces?(defn)
         !select_keyboard_apron_faces(defn).empty?
+      end
+
+      # Pure helper for tests: given lip-local face samples, return how many pass.
+      # samples: array of hashes { nx:, ny:, nz:, area_mm2:, z_span_mm: }
+      def count_apron_samples_passing(samples, up_axis = 2)
+        samples.count do |s|
+          n_up = case up_axis
+                 when 0 then s[:nx].to_f
+                 when 1 then s[:ny].to_f
+                 else s[:nz].to_f
+                 end
+          next false if n_up.abs >= 0.85
+          s[:area_mm2].to_f >= 0.5
+        end
+      end
+
+      # Old v0.1.59 filter (for regression proof in tests).
+      def count_apron_samples_passing_v59(samples)
+        return 0 if samples.empty?
+        z_max = samples.map { |s| s[:z_max].to_f }.max
+        top_cut = z_max - TABLETOP_THICKNESS_MM
+        edge_max_h = TABLETOP_THICKNESS_MM + 2.0
+        samples.count do |s|
+          next false if s[:nz].to_f.abs >= 0.50
+          span = s[:z_span_mm].to_f
+          next false if span <= edge_max_h
+          next false if s[:z_min].to_f >= top_cut
+          s[:area_mm2].to_f >= 50.0
+        end
       end
 
       def skip_container_for_apron?(key)
