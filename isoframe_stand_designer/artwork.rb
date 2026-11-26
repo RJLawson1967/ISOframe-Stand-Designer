@@ -19,6 +19,7 @@
 # photo, rear plain). v0.1.59 outward-only + back_material=nil caused solid
 # light-blue both sides.
 # v0.1.62: table apron lip-only — exclude tabletop (all faces) and 37mm beams.
+# v0.1.63: lip name often NONE (Boss-Extrude children) — geometric apron recovery.
 
 module ISOframe
   module StandDesigner
@@ -283,15 +284,15 @@ module ISOframe
           nil
         end
 
-        # v0.1.62: lip apron only (no tabletop / beams); continuous UV; never wrap.
+        # v0.1.63: named lip or geometric apron (Boss-Extrude); no top/beams.
         Tables.purge_synthetic_table_graphic_panels!(defn)
         Tables.mark_table_graphic_targets!(defn)
         lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
         apron = Tables.select_keyboard_apron_faces(defn)
         if apron.empty?
           dump = Tables.dump_baked_entity_names(defn.entities, 0)
-          raise 'No under-table apron faces found on the keyboard lip. ' \
-                'Toggle Keyboard Table off/on once (v62 bake), then try again. ' \
+          raise 'No under-table apron faces found. ' \
+                'Toggle Keyboard Table off/on once (v63 bake), then try again. ' \
                 "lip=#{lip ? lip.name : 'NONE'} bake=#{dump}"
         end
         if apron.size > 8000

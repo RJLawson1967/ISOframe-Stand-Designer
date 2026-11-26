@@ -194,6 +194,8 @@ module ISOframe
         apply_flex_to_instance!(inst, angle)
         if side == Constants::HINGE_RIGHT && pin_point && !pin_yaw_deg.nil?
           pin_world_right_post!(inst, angle, pin_point, pin_yaw_deg)
+          # Pin adjusts host world pose after rebuild — keep sibling table glued.
+          Tables.reposition_table_for_host!(inst) if defined?(Tables) && Tables.table_on?(inst)
         end
         inst
       end

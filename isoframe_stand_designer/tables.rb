@@ -40,6 +40,11 @@
 # lip (or safe apron container) has faces; paint continuous UV; never whole wrap.
 # v0.1.62: v0.1.61 spilled onto tabletop top/edge and 37mm rear beams. Paint ONLY
 # keyboard lip apron; exclude every keyboard-top face and beams/posts/frame.
+# v0.1.63: live bake has lip=NONE — SKP children are unnamed Boss-Extrude /
+# Cut-Extrude / Fillet defs. Find apron by geometry when the lip name is gone;
+# still never paint tabletop or 37mm beams/posts.
+# Also: keyboard table is a sibling but must host-follow — when Wave flex moves
+# the host S/E (or chain stick modules), reposition table = host * locked local.
 
 module ISOframe
   module StandDesigner
@@ -51,12 +56,20 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v61 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v62',
+          # Fresh name so dealers drop any cached v43–v62 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v63',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
       }.freeze
+
+      # Geometry thresholds for nameless SolidWorks feature parts (mm).
+      APRON_MIN_HEIGHT_MM = 25.0
+      APRON_MIN_FACES = 3
+      BEAM_CROSS_MM = 50.0
+      BEAM_MIN_LENGTH_MM = 200.0
+      TABLETOP_MAX_HEIGHT_MM = 25.0
+      TABLETOP_MIN_PLAN_MM = 200.0
 
       # LOCKED v0.1.56 — do not change unless Richard asks.
       # Wave-local placement nudge after orientation bake (identity pose in def).
@@ -322,12 +335,32 @@ module ISOframe
       end
 
       def reposition_table_for_host!(host)
+        return unless host && host.valid?
+        return unless table_on?(host)
         table = find_table_instance_for_host(host)
         return unless table && table.valid?
         entry = REGISTRY[table_type(host)] || REGISTRY['keyboard']
         local = attach_local_transform(host.model, entry)
+        # Locked offsets stay in `local`; world pose always tracks host.
         table.transformation = host.transformation * local
         table
+      rescue StandardError => e
+        puts "[ISOframe] reposition_table_for_host! failed: #{e.message}"
+        nil
+      end
+
+      # After flex / chain stick moves: glue every listed host's keyboard table.
+      def follow_hosts!(hosts)
+        Array(hosts).each do |host|
+          next unless host && host.valid?
+          next unless SelectionUtil.wave_module?(host)
+          next unless table_on?(host)
+          reposition_table_for_host!(host)
+        end
+        nil
+      rescue StandardError => e
+        puts "[ISOframe] Tables.follow_hosts! failed: #{e.message}"
+        nil
       end
 
       def find_table_instance_for_host(host)
@@ -944,6 +977,13 @@ module ISOframe
       def mark_table_graphic_targets!(defn)
         return unless defn && defn.valid?
         walk_mark_graphics!(defn.entities, 0)
+        # When lip name is missing (Boss-Extrude bake), mark best geometric apron.
+        unless find_keyboard_lip_entity(defn.entities, 0)
+          geo = find_best_geometric_apron_target(defn)
+          mark_as_table_graphic!(geo[0]) if geo && geo[0]
+        end
+      rescue StandardError
+        nil
       end
 
       def walk_mark_graphics!(entities, depth)
@@ -1091,8 +1131,9 @@ module ISOframe
       end
 
       # Apron faces for Apply Table Artwork (live bake path).
-      # v0.1.62: ONLY keyboard lip. Never tabletop (top/bottom/15mm edges) or
-      # 37mm beams/posts/frame. Continuous UV. No ALL-faces / rolable spill.
+      # v0.1.63: lip name often missing (Boss-Extrude…). Prefer named lip; else
+      # pick curved vertical apron geometry under the top. Never tabletop or
+      # 37mm beams/posts/frame. Continuous UV.
       def select_keyboard_apron_faces(defn)
         return [] unless defn && defn.valid?
         samples = apron_face_samples(defn)
@@ -1101,7 +1142,6 @@ module ISOframe
         top_band = tabletop_z_band_mm(defn, samples)
         chosen = samples.select { |s| apron_sample_allowed?(s, top_band) }
         if chosen.empty?
-          # Looser vertical tilt, still never horizontal / top-band / edge strip.
           chosen = samples.select { |s| apron_sample_allowed?(s, top_band, 0.92) }
           puts "[ISOframe] apron loose-vertical count=#{chosen.size}"
         end
@@ -1119,16 +1159,12 @@ module ISOframe
       def apron_sample_allowed?(sample, top_band, nz_max = 0.85)
         return false unless sample[:face] && sample[:face].valid?
         return false if sample[:area_mm2].to_f < 0.5
-        # No tabletop top/bottom (near-horizontal in bake-root).
         return false if sample[:nz].to_f.abs >= nz_max
         zmin = sample[:z_min_mm].to_f
         zmax = sample[:z_max_mm].to_f
         zspan = sample[:z_span_mm].to_f
         if top_band
-          # Any face that intersects the 15mm tabletop Z band is excluded
-          # (top surface, underside at top, and all edge faces).
           return false if zmax >= top_band[:z_min] - 0.5 && zmin <= top_band[:z_max] + 0.5
-          # Short ~15mm vertical edge whose centroid sits in the top band.
           edge_max = TABLETOP_THICKNESS_MM + 2.0
           mid = (zmin + zmax) * 0.5
           if zspan <= edge_max && mid >= top_band[:z_min] - 0.5 && mid <= top_band[:z_max] + 0.5
@@ -1138,21 +1174,19 @@ module ISOframe
         true
       end
 
-      # Samples with bake-root normals (nz) — lip only, never top/beams.
+      # Named lip → marked apron → geometric Boss-Extrude recovery.
       def apron_face_samples(defn)
         target, tr = resolve_apron_target_with_transform(defn)
         samples = []
         id = identity_transform
         if target && target.valid?
-          gather_face_samples!(target, samples, 0, tr || id, 'lip')
-          puts "[ISOframe] apron lip raw faces=#{samples.size} " \
-               "name=#{target.name} def=#{target.respond_to?(:definition) ? target.definition.name : '-'}"
+          gather_face_samples!(target, samples, 0, tr || id, 'apron')
+          puts "[ISOframe] apron target raw faces=#{samples.size} " \
+               "name=#{target.name} def=#{def_name_of(target)}"
         else
-          puts '[ISOframe] select_keyboard_apron_faces: lip not found — lip-only safe walk'
-        end
-        if samples.empty?
-          gather_safe_apron_samples!(defn.entities, samples, 0, id, '')
-          puts "[ISOframe] apron safe-walk (lip path only) faces=#{samples.size}"
+          puts '[ISOframe] apron: lip name NONE — geometric recovery among bake children'
+          samples = geometric_apron_face_samples(defn)
+          puts "[ISOframe] apron geometric faces=#{samples.size}"
         end
         enrich_sample_z_mm!(samples)
         samples
@@ -1174,33 +1208,41 @@ module ISOframe
         end
       end
 
-      # Z band of keyboard top in bake-root mm. Prefer real top component bounds.
+      # Z band of keyboard top in bake-root mm. Named top, else tabletop-like bbox.
       def tabletop_z_band_mm(defn, samples)
         id = identity_transform
         top = find_keyboard_top_with_transform(defn.entities, 0, id)
-        if top && top[0]
-          begin
-            bb = top[0].bounds
-            tr = top[1] || id
-            corners = [
-              Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z),
-              Geom::Point3d.new(bb.max.x, bb.max.y, bb.max.z),
-              Geom::Point3d.new(bb.min.x, bb.min.y, bb.max.z),
-              Geom::Point3d.new(bb.max.x, bb.max.y, bb.min.z),
-              Geom::Point3d.new(bb.min.x, bb.max.y, bb.min.z),
-              Geom::Point3d.new(bb.max.x, bb.min.y, bb.max.z)
-            ]
-            zs = corners.map { |p| (tr * p).z.to_f / 1.mm }
-            return { z_min: zs.min, z_max: zs.max } if zs.any?
-          rescue StandardError
-            nil
-          end
-        end
+        band = entity_z_band_mm(top[0], top[1]) if top && top[0]
+        return band if band
+
+        geo_top = find_tabletop_like_container(defn)
+        band = entity_z_band_mm(geo_top[0], geo_top[1]) if geo_top && geo_top[0]
+        return band if band
+
         return nil if samples.nil? || samples.empty?
-        # Last resort: treat the highest 15mm of lip samples as forbidden band
-        # (lip sits under the top — its own max is usually below the top).
+        # Highest 15mm of candidate geometry — forbidden band for apron filter.
         all_zmax = samples.map { |s| s[:z_max_mm].to_f }.max
-        { z_min: all_zmax - TABLETOP_THICKNESS_MM, z_max: all_zmax + TABLETOP_THICKNESS_MM }
+        { z_min: all_zmax - TABLETOP_THICKNESS_MM, z_max: all_zmax + 1.0 }
+      rescue StandardError
+        nil
+      end
+
+      def entity_z_band_mm(ent, tr)
+        return nil unless ent && ent.valid?
+        bb = ent.bounds
+        return nil if bb.nil? || bb.empty?
+        tr ||= identity_transform
+        corners = [
+          Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z),
+          Geom::Point3d.new(bb.max.x, bb.max.y, bb.max.z),
+          Geom::Point3d.new(bb.min.x, bb.min.y, bb.max.z),
+          Geom::Point3d.new(bb.max.x, bb.max.y, bb.min.z),
+          Geom::Point3d.new(bb.min.x, bb.max.y, bb.min.z),
+          Geom::Point3d.new(bb.max.x, bb.min.y, bb.max.z)
+        ]
+        zs = corners.map { |p| (tr * p).z.to_f / 1.mm }
+        return nil if zs.empty?
+        { z_min: zs.min, z_max: zs.max }
       rescue StandardError
         nil
       end
@@ -1209,20 +1251,245 @@ module ISOframe
         @identity_transform ||= Geom::Transformation.new
       end
 
-      # Lip only — never rolable/wrap/top (those spilled artwork in v0.1.61).
+      # Named lip → attribute-marked apron → geometric Boss-Extrude container.
       def resolve_apron_target_with_transform(defn)
         id = identity_transform
         hit = find_keyboard_lip_with_transform(defn.entities, 0, id)
         return hit if hit && hit[0]
 
-        marked = find_marked_table_graphic(defn.entities, 0)
-        if marked && marked.valid? && lip_name?(marked.name.to_s, def_name_of(marked)) &&
-           !wrap_container?(marked.name.to_s, def_name_of(marked))
+        marked = find_marked_apron_target(defn.entities, 0)
+        if marked && marked.valid?
           tr = find_entity_transform(defn.entities, marked, 0, id)
           return [marked, tr || id]
         end
 
+        geo = find_best_geometric_apron_target(defn)
+        if geo && geo[0]
+          mark_as_table_graphic!(geo[0])
+          puts "[ISOframe] apron geometric target def=#{def_name_of(geo[0])} name=#{geo[0].name}"
+          return geo
+        end
+
         [nil, nil]
+      end
+
+      # Marked apron may be a nameless Boss-Extrude (no "lip" string).
+      def find_marked_apron_target(entities, depth)
+        return nil if entities.nil? || depth > 8
+        entities.each do |e|
+          next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+          next unless e.valid?
+          iname = e.name.to_s
+          dname = def_name_of(e)
+          key = "#{iname} #{dname}"
+          if table_graphic_marked?(e) && !wrap_container?(iname, dname) &&
+             !top_name?(iname, dname) && !blocked_apron_descend?(key)
+            return e
+          end
+          child = e.is_a?(Sketchup::Group) ? e.entities : e.definition.entities
+          nested = find_marked_apron_target(child, depth + 1)
+          return nested if nested
+        end
+        nil
+      end
+
+      # Pick best bake child that looks like the curved under-table apron.
+      def find_best_geometric_apron_target(defn)
+        id = identity_transform
+        top_band = tabletop_z_band_mm(defn, [])
+        cands = []
+        collect_apron_candidate_containers!(defn.entities, 0, id, '', cands)
+        best = nil
+        best_score = -1.0
+        best_samples = nil
+        cands.each do |c|
+          samples = []
+          gather_face_samples!(c[:ent], samples, 0, c[:tr], c[:key])
+          enrich_sample_z_mm!(samples)
+          score = score_apron_candidate_samples(samples, top_band)
+          next if score < 0.0
+          if score > best_score
+            best_score = score
+            best = [c[:ent], c[:tr]]
+            best_samples = samples
+          end
+        end
+        puts "[ISOframe] geometric apron score=#{best_score.round(2)} " \
+             "cands=#{cands.size} faces=#{best_samples ? best_samples.size : 0}"
+        best
+      end
+
+      def geometric_apron_face_samples(defn)
+        target, tr = find_best_geometric_apron_target(defn)
+        samples = []
+        if target && target.valid?
+          mark_as_table_graphic!(target)
+          gather_face_samples!(target, samples, 0, tr || identity_transform, 'apron')
+          return samples
+        end
+        # Last resort: pool non-blocked faces, then keep only those that pass
+        # geometry score filters (still excludes top/beams via blocked + band).
+        pool = []
+        gather_face_samples!(defn, pool, 0, identity_transform, 'bake')
+        enrich_sample_z_mm!(pool)
+        top_band = tabletop_z_band_mm(defn, pool)
+        pool.select { |s| apron_sample_allowed?(s, top_band) && !sample_beam_like?(s) }
+      end
+
+      def collect_apron_candidate_containers!(entities, depth, tr, parent_key, out)
+        return if entities.nil? || depth > 8
+        entities.each do |e|
+          next unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
+          next unless e.valid?
+          iname = e.name.to_s
+          dname = def_name_of(e)
+          key = "#{parent_key} #{iname} #{dname}"
+          next if blocked_apron_descend?(key)
+          next if wrap_container?(iname, dname)
+          next if top_name?(iname, dname)
+          local = tr * e.transformation
+          out << { ent: e, tr: local, key: key }
+          child = e.is_a?(Sketchup::Group) ? e.entities : e.definition.entities
+          collect_apron_candidate_containers!(child, depth + 1, local, key, out)
+        end
+      end
+
+      def find_tabletop_like_container(defn)
+        id = identity_transform
+        cands = []
+        collect_apron_candidate_containers!(defn.entities, 0, id, '', cands)
+        # Also allow named top path even if blocked for apron paint.
+        named = find_keyboard_top_with_transform(defn.entities, 0, id)
+        return named if named && named[0]
+
+        best = nil
+        best_area = 0.0
+        cands.each do |c|
+          dims = entity_bbox_mm(c[:ent], c[:tr])
+          next unless dims
+          next unless tabletop_like_dims?(dims[:dx], dims[:dy], dims[:dz])
+          area = dims[:dx] * dims[:dy]
+          if area > best_area
+            best_area = area
+            best = [c[:ent], c[:tr]]
+          end
+        end
+        best
+      end
+
+      def entity_bbox_mm(ent, tr)
+        return nil unless ent && ent.valid?
+        bb = ent.bounds
+        return nil if bb.nil? || bb.empty?
+        tr ||= identity_transform
+        corners = [
+          Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z),
+          Geom::Point3d.new(bb.max.x, bb.max.y, bb.max.z)
+        ]
+        pts = [
+          tr * Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z),
+          tr * Geom::Point3d.new(bb.max.x, bb.min.y, bb.min.z),
+          tr * Geom::Point3d.new(bb.min.x, bb.max.y, bb.min.z),
+          tr * Geom::Point3d.new(bb.min.x, bb.min.y, bb.max.z),
+          tr * Geom::Point3d.new(bb.max.x, bb.max.y, bb.max.z)
+        ]
+        xs = pts.map { |p| p.x.to_f / 1.mm }
+        ys = pts.map { |p| p.y.to_f / 1.mm }
+        zs = pts.map { |p| p.z.to_f / 1.mm }
+        {
+          dx: xs.max - xs.min,
+          dy: ys.max - ys.min,
+          dz: zs.max - zs.min,
+          z_min: zs.min,
+          z_max: zs.max
+        }
+      rescue StandardError
+        nil
+      end
+
+      # Pure-ish scorer for tests: samples with nz/area/z_*/points optional.
+      def score_apron_candidate_samples(samples, top_band = nil)
+        return -1.0 if samples.nil? || samples.size < APRON_MIN_FACES
+        enrich_sample_z_mm!(samples) unless samples.first && samples.first.key?(:z_min_mm)
+        dims = samples_bbox_mm(samples)
+        return -1.0 if dims.nil?
+        return -1.0 if tabletop_like_dims?(dims[:dx], dims[:dy], dims[:dz])
+        return -1.0 if beam_like_dims?(dims[:dx], dims[:dy], dims[:dz])
+
+        allowed = samples.select { |s| apron_sample_allowed?(s, top_band) }
+        return -1.0 if allowed.size < APRON_MIN_FACES
+
+        zspan = allowed.map { |s| s[:z_max_mm].to_f }.max - allowed.map { |s| s[:z_min_mm].to_f }.min
+        return -1.0 if zspan < APRON_MIN_HEIGHT_MM
+
+        horiz = samples.count { |s| s[:nz].to_f.abs >= 0.85 }
+        vert_ratio = allowed.size.to_f / samples.size.to_f
+        return -1.0 if horiz.to_f / samples.size > 0.55
+
+        angle_span = samples_xy_angle_span(allowed)
+        # Prefer curved (wide angle span) tall vertical clusters.
+        allowed.size * (0.5 + angle_span) * (zspan / 50.0) * (0.35 + vert_ratio)
+      end
+
+      def samples_bbox_mm(samples)
+        # Prefer explicit mm extents (tests / precomputed); else SketchUp points.
+        if samples.any? { |s| s[:dx_mm] }
+          return {
+            dx: samples.map { |s| s[:dx_mm].to_f }.max,
+            dy: samples.map { |s| s[:dy_mm].to_f }.max,
+            dz: samples.map { |s| s[:dz_mm].to_f }.max
+          }
+        end
+        xs = []
+        ys = []
+        zs = []
+        samples.each do |s|
+          (s[:points_root] || []).each do |p|
+            xs << (p.x.to_f / 1.mm)
+            ys << (p.y.to_f / 1.mm)
+            zs << (p.z.to_f / 1.mm)
+          end
+        end
+        return nil if xs.empty?
+        { dx: xs.max - xs.min, dy: ys.max - ys.min, dz: zs.max - zs.min }
+      rescue StandardError
+        nil
+      end
+
+      def samples_xy_angle_span(samples)
+        angs = samples.map { |s| Math.atan2(s[:ny].to_f, s[:nx].to_f) }
+        return 0.0 if angs.empty?
+        angs.max - angs.min
+      rescue StandardError
+        0.0
+      end
+
+      def tabletop_like_dims?(dx, dy, dz)
+        dz.to_f <= TABLETOP_MAX_HEIGHT_MM &&
+          dx.to_f >= TABLETOP_MIN_PLAN_MM &&
+          dy.to_f >= TABLETOP_MIN_PLAN_MM
+      end
+
+      def beam_like_dims?(dx, dy, dz)
+        dims = [dx.to_f, dy.to_f, dz.to_f].sort
+        dims[0] <= BEAM_CROSS_MM && dims[1] <= BEAM_CROSS_MM && dims[2] >= BEAM_MIN_LENGTH_MM
+      end
+
+      def sample_beam_like?(sample)
+        return false unless sample[:points_root] && sample[:points_root].size >= 2
+        dims = samples_bbox_mm([sample])
+        dims && beam_like_dims?(dims[:dx], dims[:dy], dims[:dz])
+      rescue StandardError
+        false
+      end
+
+      # Pure helpers for tests (mm extents).
+      def tabletop_like_dims_mm?(dx, dy, dz)
+        tabletop_like_dims?(dx, dy, dz)
+      end
+
+      def beam_like_dims_mm?(dx, dy, dz)
+        beam_like_dims?(dx, dy, dz)
       end
 
       def find_keyboard_lip_with_transform(entities, depth, tr)
@@ -1485,7 +1752,6 @@ module ISOframe
       end
 
       # v0.1.62: vertical under lip, exclude tabletop band + short edge strips.
-      # samples may include :z_min_mm/:z_max_mm/:z_span_mm and optional top_band.
       def count_apron_samples_passing_v62(samples, top_band = nil)
         return 0 if samples.empty?
         if top_band.nil?
@@ -1504,6 +1770,13 @@ module ISOframe
           next false if zspan <= edge_max && mid >= top_band[:z_min] - 0.5 && mid <= top_band[:z_max] + 0.5
           true
         end
+      end
+
+      # v0.1.63: geometry score > 0 for apron-like Boss-Extrude clusters.
+      def count_apron_samples_passing_v63(samples, top_band = nil)
+        score = score_apron_candidate_samples(samples, top_band)
+        return 0 if score < 0.0
+        count_apron_samples_passing_v62(samples, top_band)
       end
 
       def skip_container_for_apron?(key)

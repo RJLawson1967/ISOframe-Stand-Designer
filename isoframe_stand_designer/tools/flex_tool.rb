@@ -306,6 +306,13 @@ module ISOframe
           end
           Constraints.ensure_module_on_floor!(@inst) if @inst && @inst.valid?
 
+          # Keyboard table is a sibling instance — must track host S/E when flex
+          # moves the stick chain (or the flexed module itself).
+          if defined?(Tables)
+            Tables.follow_hosts!(@chain)
+            Tables.follow_hosts!([@inst]) if @inst && @inst.valid?
+          end
+
           assert_hinge_frozen!(angle)
         end
 
