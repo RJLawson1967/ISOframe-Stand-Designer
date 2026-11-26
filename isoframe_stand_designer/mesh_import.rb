@@ -7,10 +7,16 @@ module ISOframe
     module MeshImport
       module_function
 
+      # Resolve at call time from this file's directory (release zip layout:
+      # isoframe_stand_designer/mesh_import.rb + isoframe_stand_designer/models/).
+      def models_dir
+        File.expand_path(File.join(File.dirname(File.expand_path(__FILE__)), 'models'))
+      end
+
       MODELS_DIR = File.join(File.dirname(__FILE__), 'models').freeze
 
       def model_path(filename)
-        File.join(MODELS_DIR, filename.to_s)
+        File.join(models_dir, filename.to_s)
       end
 
       # Load (or reuse) a definition named `defn_name` from a bundled OBJ.

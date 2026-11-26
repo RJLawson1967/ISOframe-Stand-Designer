@@ -57,6 +57,8 @@
 # v0.1.68: live bake has only Boss-Extrude children — Graphic Keyboard wrap is
 # NEVER in Keyboard_with_Extension bake. Always load Keyboard_table_graphic_wrap.skp
 # and instance it under the top (apron front) on place + apply.
+# v0.1.69: wrap SKP must ship inside plugin models/; resolve via __FILE__ next to
+# tables.rb with logged fallbacks — v0.1.68 zip omitted the SKP so instance failed.
 
 module ISOframe
   module StandDesigner
@@ -68,8 +70,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v67 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v68',
+          # Fresh name so dealers drop any cached v43–v68 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v69',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -768,15 +770,39 @@ module ISOframe
         false
       end
 
+      # Resolve Keyboard_table_graphic_wrap.skp — must live under
+      # isoframe_stand_designer/models/ next to this file in the release zip.
+      def graphic_wrap_skp_candidates
+        here = File.dirname(File.expand_path(__FILE__)) # .../isoframe_stand_designer
+        [
+          File.join(here, 'models', SKP_GRAPHIC_WRAP),
+          MeshImport.model_path(SKP_GRAPHIC_WRAP),
+          File.expand_path(File.join(here, '..', 'isoframe_stand_designer', 'models', SKP_GRAPHIC_WRAP)),
+          # Cloud-agent store media (dev only).
+          File.expand_path(File.join(here, '..', '..', '..', '..', 'media', 'tables', SKP_GRAPHIC_WRAP))
+        ].map { |p| File.expand_path(p) }.uniq
+      end
+
       def graphic_wrap_skp_path
-        p = MeshImport.model_path(SKP_GRAPHIC_WRAP)
-        return p if File.file?(p)
-        # Dev/store fallback (cloud agent media/).
-        alt = File.expand_path(
-          File.join(File.dirname(__FILE__), '..', '..', '..', '..', 'media', 'tables', SKP_GRAPHIC_WRAP)
-        )
-        return alt if File.file?(alt)
-        p
+        tried = []
+        graphic_wrap_skp_candidates.each do |p|
+          ok = File.file?(p)
+          tried << "#{ok ? 'HIT' : 'miss'} #{p}"
+          if ok
+            puts "[ISOframe] graphic wrap SKP path: #{p}"
+            return p
+          end
+        end
+        puts "[ISOframe] graphic wrap SKP NOT FOUND. Tried:\n  #{tried.join("\n  ")}"
+        nil
+      end
+
+      def graphic_wrap_skp_path!
+        path = graphic_wrap_skp_path
+        return path if path
+        raise "#{SKP_GRAPHIC_WRAP} not found next to the plugin. " \
+              "Reinstall v0.1.69 zip (models/#{SKP_GRAPHIC_WRAP} must be present). " \
+              "Tried:\n#{graphic_wrap_skp_candidates.join("\n")}"
       end
 
       # Find Graphic Keyboard Attachment (Rolable) inside the table bake.
@@ -929,33 +955,29 @@ module ISOframe
         end
 
         # 2) Load Keyboard_table_graphic_wrap.skp and instance into bake.
-        path = graphic_wrap_skp_path
-        unless File.file?(path)
-          puts "[ISOframe] missing #{SKP_GRAPHIC_WRAP} at #{path}"
-          return [nil, nil]
-        end
+        path = graphic_wrap_skp_path!
+        puts "[ISOframe] loading wrap SKP: #{path} (#{File.size(path)} bytes)"
 
         root = ensure_skp_imported!(model, path)
         gdef = find_best_graphic_wrap_definition(model)
         unless gdef
-          # Last chance: walk loaded root for an instance and take its definition.
           if root && root.valid?
             nested = find_graphic_wrap_with_transform(root.entities, 0, identity_transform)
             if nested && nested[0].is_a?(Sketchup::ComponentInstance)
               gdef = nested[0].definition
-            elsif nested && nested[0].is_a?(Sketchup::Group)
-              # Can't instance a group def — copy via temporary? Skip.
-              gdef = nil
             end
           end
         end
         unless gdef && gdef.valid?
-          puts '[ISOframe] no Graphic Keyboard wrap definition in wrap SKP'
-          return [nil, nil]
+          raise "Loaded #{File.basename(path)} but found no Graphic Keyboard wrap definition. " \
+                "path=#{path}"
         end
 
         local = wrap_placement_transform_for_bake(table_defn, gdef)
         inst = table_defn.entities.add_instance(gdef, local)
+        unless inst && inst.valid?
+          raise "add_instance failed for wrap def=#{gdef.name} path=#{path}"
+        end
         inst.name = INSTANCED_WRAP_NAME if inst.respond_to?(:name=)
         mark_as_table_graphic!(inst)
         begin
@@ -963,12 +985,12 @@ module ISOframe
         rescue StandardError
           nil
         end
-        puts "[ISOframe] INSTANCED wrap from #{File.basename(path)} def=#{gdef.name} " \
+        puts "[ISOframe] INSTANCED wrap from #{path} def=#{gdef.name} " \
              "origin=#{local.origin}"
         [inst, local]
       rescue StandardError => e
         puts "[ISOframe] ensure_graphic_wrap_target! failed: #{e.message}"
-        [nil, nil]
+        raise
       end
 
       # make_unique wrap + nested CIs, then collect FRONT faces only (outward).
