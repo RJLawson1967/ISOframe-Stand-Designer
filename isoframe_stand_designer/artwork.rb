@@ -23,6 +23,12 @@
 # Wall — front wallpaper only; reverse of front faces + rear slab get panel
 # plain tint (Geometry::GRAPHIC_PLAIN_RGB), never wallpaper and never nil
 # (nil → SketchUp default light-blue).
+# v0.1.64: CRITICAL — v0.1.63 plain Color on back_material made wall texture
+# invisible (same class of failure as v0.1.59 nil). Restore v0.1.58/61 paint
+# (wallpaper on BOTH sides of FRONT faces) so Apply Artwork is visible again;
+# then force rear *slab* faces to a named plain Material (not nil, not empty).
+# Table apron: never-empty geometric fallback when lip=NONE; opaque both sides
+# + soft/smooth/hide edges so wrap front is line-free and posts don't show through.
 
 module ISOframe
   module StandDesigner
@@ -287,7 +293,7 @@ module ISOframe
           nil
         end
 
-        # v0.1.63: named lip or geometric apron (Boss-Extrude); no top/beams.
+        # v0.1.64: named lip or geometric apron (Boss-Extrude); no top/beams.
         Tables.purge_synthetic_table_graphic_panels!(defn)
         Tables.mark_table_graphic_targets!(defn)
         lip = Tables.find_keyboard_lip_entity(defn.entities, 0)
@@ -295,7 +301,7 @@ module ISOframe
         if apron.empty?
           dump = Tables.dump_baked_entity_names(defn.entities, 0)
           raise 'No under-table apron faces found. ' \
-                'Toggle Keyboard Table off/on once (v63 bake), then try again. ' \
+                'Toggle Keyboard Table off/on once (v64 bake), then try again. ' \
                 "lip=#{lip ? lip.name : 'NONE'} bake=#{dump}"
         end
         if apron.size > 8000
@@ -354,6 +360,8 @@ module ISOframe
       end
 
       # Continuous unwrap in lip-local space: U = angle in horizontal plane, V = up.
+      # Opaque both sides (posts/beams must not show through). Soft+hide edges so
+      # the graphic wrap front reads as one clean surface (no tessellation lines).
       def paint_apron_continuous!(faces, material)
         return 0 if faces.nil? || faces.empty?
         frame = apron_uv_frame(faces)
@@ -366,7 +374,8 @@ module ISOframe
             next if verts.size < 3
             face.material = material
             begin
-              face.back_material = nil
+              # Opaque reverse — nil back_material lets posts show through.
+              face.back_material = material
             rescue StandardError
               nil
             end
@@ -383,7 +392,32 @@ module ISOframe
             nil
           end
         end
+        soften_hide_graphic_front_edges!(faces)
         painted
+      end
+
+      # Soft + smooth + hide edges on painted graphic faces so the front is
+      # free of mesh lines/detail (apron wrap or wall panel ribs).
+      def soften_hide_graphic_front_edges!(faces)
+        return if faces.nil? || faces.empty?
+        seen = {}
+        faces.each do |face|
+          next unless face && face.valid?
+          face.edges.each do |e|
+            next unless e && e.valid?
+            next if seen[e.entityID]
+            seen[e.entityID] = true
+            begin
+              e.soft = true
+              e.smooth = true
+              e.hidden = true
+            rescue StandardError
+              nil
+            end
+          end
+        end
+      rescue StandardError
+        nil
       end
 
       def apron_uv_frame(faces)
@@ -819,9 +853,10 @@ module ISOframe
         end
       end
 
-      # Paint FRONT wallpaper (v0.1.58 UV), reverse + rear slab stay panel plain.
-      # Never put wallpaper on back_material (shows from flex-link side). Never
-      # nil materials on rear (SketchUp default light-blue).
+      # Visible wall wallpaper: proven v0.1.58/61 UV on FRONT faces (both sides
+      # of those faces get the wallpaper Material — required on this soft 3mm
+      # panel; Color/nil on back_material made Apply Artwork a no-op in v59/v63).
+      # Then force rear *slab* faces to a named plain Material (framework side).
       def map_graphic_group!(group, material, bay_index, bay_count, height_mm, flex_angle_deg = 0.0)
         faces = group.entities.grep(Sketchup::Face).select { |f| f.valid? }
         path = bay_front_path(flex_angle_deg)
@@ -830,12 +865,14 @@ module ISOframe
         return 0 if vertical.empty?
 
         front, rear = partition_front_rear_faces(vertical, path)
-        # If outward test yields no front, take the least-inward cluster only —
-        # never fall back to painting every vertical face (that paints the rear).
         if front.empty?
           front, rear = recover_front_faces_from_vertical(vertical, path)
         end
-        return 0 if front.empty?
+        # Last resort (odd transforms): paint verticals, then strip rear after.
+        if front.empty?
+          front = vertical
+          rear = []
+        end
 
         bay_w = Constants::GRAPHIC_BAY_MM.mm
         tex_w, tex_h = texture_dims(material, bay_w, height_mm.to_f.mm)
@@ -851,10 +888,26 @@ module ISOframe
           painted += 1 if paint_front_face!(face, material, u0, u1, h, path, cum, total)
         end
 
-        # Rear of the 3mm panel + non-front scraps stay plain panel tint.
-        restore_plain_wall_faces!(rear)
-        restore_plain_wall_faces!(faces - front - rear)
-        restore_non_front_wall_faces!(faces, front)
+        # Re-classify so true rear slabs never keep wallpaper (even if fallback
+        # painted all verticals). Plain Material — not nil (light-blue).
+        model = wall_group_model(group)
+        front_keep, rear_force = partition_front_rear_faces(vertical, path)
+        if front_keep.empty?
+          restore_plain_wall_faces!(rear, model)
+          restore_plain_wall_faces!(faces - front - rear, model)
+          soften_hide_graphic_front_edges!(front)
+        else
+          restore_plain_wall_faces!(rear_force, model)
+          restore_plain_wall_faces!(faces - front_keep - rear_force, model)
+          soften_hide_graphic_front_edges!(front_keep)
+        end
+        # Also soft longitudinal seams inside the GraphicHint group (posts must
+        # not read through panel ribs).
+        begin
+          Geometry.soften_longitudinal_seams!(group.entities) if group.valid?
+        rescue StandardError
+          nil
+        end
 
         painted
       end
@@ -981,11 +1034,40 @@ module ISOframe
         front.empty? ? vertical : front
       end
 
+      PLAIN_WALL_MATERIAL_NAME = 'ISOframe Graphic Plain'
+
       def plain_wall_color
         rgb = Geometry::GRAPHIC_PLAIN_RGB
         Sketchup::Color.new(rgb[0], rgb[1], rgb[2])
       rescue StandardError
         Sketchup::Color.new(230, 235, 245)
+      end
+
+      def wall_group_model(group)
+        return group.model if group.respond_to?(:model) && group.model
+        parent = group.entities.parent if group.respond_to?(:entities)
+        return parent if parent.is_a?(Sketchup::Model)
+        return parent.model if parent.respond_to?(:model)
+        nil
+      rescue StandardError
+        nil
+      end
+
+      # Named opaque Material (not raw Color, not nil) for rear slab / scraps.
+      def ensure_plain_wall_material!(model)
+        color = plain_wall_color
+        return color unless model && model.respond_to?(:materials)
+        mat = model.materials[PLAIN_WALL_MATERIAL_NAME]
+        mat = model.materials.add(PLAIN_WALL_MATERIAL_NAME) if mat.nil?
+        begin
+          mat.color = color
+          mat.texture = nil if mat.respond_to?(:texture=)
+        rescue StandardError
+          nil
+        end
+        mat
+      rescue StandardError
+        plain_wall_color
       end
 
       # Prefer least-inward vertical faces when partition found no outward front.
@@ -1005,13 +1087,14 @@ module ISOframe
         [front, rear]
       end
 
-      def restore_plain_wall_faces!(faces)
-        color = plain_wall_color
+      def restore_plain_wall_faces!(faces, model = nil)
+        return if faces.nil? || faces.empty?
+        plain = ensure_plain_wall_material!(model)
         faces.each do |f|
           next unless f && f.valid?
           begin
-            f.material = color
-            f.back_material = color
+            f.material = plain
+            f.back_material = plain
           rescue StandardError
             nil
           end
@@ -1020,7 +1103,7 @@ module ISOframe
 
       # Kept name for older call sites / tests — restores plain tint (not nil).
       def clear_wall_face_materials!(faces)
-        restore_plain_wall_faces!(faces)
+        restore_plain_wall_faces!(faces, nil)
       end
 
       def front_outward_normal_at(point, path)
@@ -1060,16 +1143,16 @@ module ISOframe
         Geom::Vector3d.new(0, 1, 0)
       end
 
-      def restore_non_front_wall_faces!(all_faces, front_faces)
+      def restore_non_front_wall_faces!(all_faces, front_faces, model = nil)
         front_ids = {}
         front_faces.each { |f| front_ids[f.entityID] = true if f.valid? }
         extras = all_faces.select { |f| f.valid? && !front_ids[f.entityID] }
-        restore_plain_wall_faces!(extras)
+        restore_plain_wall_faces!(extras, model)
       end
 
       # Alias — older name cleared to nil (light-blue); now restores plain tint.
       def clear_non_front_wall_materials!(all_faces, front_faces)
-        restore_non_front_wall_faces!(all_faces, front_faces)
+        restore_non_front_wall_faces!(all_faces, front_faces, nil)
       end
 
       def face_area_mm2(face)
@@ -1079,25 +1162,21 @@ module ISOframe
       end
 
       def paint_front_face!(face, material, u0, u1, h, path, cum, total)
-        # Front = wallpaper + UV. Reverse = panel plain (never wallpaper — that
-        # painted the framework/flex-link view; never nil — that was light-blue).
-        plain = plain_wall_color
+        # v0.1.58/61: BOTH sides of the FRONT face get the wallpaper Material so
+        # the soft 3mm panel displays the texture. Rear *slab* faces are forced
+        # plain afterward — do NOT put Color/nil on back_material here (v59/v63
+        # no-op / light-blue regressions).
         face.material = material
-        face.back_material = plain
+        face.back_material = material
         verts = face.outer_loop.vertices.map(&:position)
         return material_only_ok?(face, material) if verts.size < 3
 
         try_position_uv!(face, material, verts, u0, u1, h, path, cum, total)
-        begin
-          face.back_material = plain
-        rescue StandardError
-          nil
-        end
         material_only_ok?(face, material)
       rescue StandardError
         begin
           face.material = material
-          face.back_material = plain_wall_color
+          face.back_material = material
         rescue StandardError
           nil
         end

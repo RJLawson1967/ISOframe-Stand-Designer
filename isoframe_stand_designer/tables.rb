@@ -56,8 +56,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v62 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v63',
+          # Fresh name so dealers drop any cached v43–v63 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v64',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -1131,12 +1131,17 @@ module ISOframe
       end
 
       # Apron faces for Apply Table Artwork (live bake path).
-      # v0.1.63: lip name often missing (Boss-Extrude…). Prefer named lip; else
-      # pick curved vertical apron geometry under the top. Never tabletop or
-      # 37mm beams/posts/frame. Continuous UV.
+      # v0.1.64: lip name often missing (Boss-Extrude…). Prefer named lip; else
+      # geometric apron under the top; never-empty pool fallback. Never tabletop
+      # or 37mm beams/posts/frame. Continuous UV.
       def select_keyboard_apron_faces(defn)
         return [] unless defn && defn.valid?
         samples = apron_face_samples(defn)
+        if samples.empty?
+          samples = geometric_apron_face_samples(defn)
+          enrich_sample_z_mm!(samples)
+          puts "[ISOframe] apron samples empty — geometric pool=#{samples.size}"
+        end
         return [] if samples.empty?
 
         top_band = tabletop_z_band_mm(defn, samples)
@@ -1145,11 +1150,26 @@ module ISOframe
           chosen = samples.select { |s| apron_sample_allowed?(s, top_band, 0.92) }
           puts "[ISOframe] apron loose-vertical count=#{chosen.size}"
         end
+        if chosen.empty?
+          # Last resort: non-horizontal, non-beam, outside top band — still paints.
+          chosen = samples.select do |s|
+            next false if s[:area_mm2].to_f < 0.5
+            next false if s[:nz].to_f.abs >= 0.95
+            next false if sample_beam_like?(s)
+            if top_band
+              zmin = s[:z_min_mm].to_f
+              zmax = s[:z_max_mm].to_f
+              next false if zmax >= top_band[:z_min] - 0.5 && zmin <= top_band[:z_max] + 0.5
+            end
+            true
+          end
+          puts "[ISOframe] apron last-resort count=#{chosen.size}"
+        end
         if chosen.size > 8000
           chosen = chosen.sort_by { |s| -s[:area_mm2] }.first(2500)
           puts "[ISOframe] apron capped to #{chosen.size} largest faces"
         end
-        faces = chosen.map { |s| s[:face] }
+        faces = chosen.map { |s| s[:face] }.compact
         puts "[ISOframe] apron selected=#{faces.size} raw_samples=#{samples.size} " \
              "top_band_mm=#{top_band.inspect}"
         faces
