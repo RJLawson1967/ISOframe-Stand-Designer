@@ -23,7 +23,10 @@ module ISOframe
       # OBJ vertices are millimetres; converted with .mm for SketchUp inches.
       def definition_from_obj!(model, defn_name, filename, color: nil)
         existing = model.definitions[defn_name]
-        return existing if existing && !existing.image? && existing.entities.size > 0
+        if existing && !existing.image? && existing.entities.size > 0
+          Geometry.soften_definition_edges!(existing) if defined?(Geometry)
+          return existing
+        end
 
         path = model_path(filename)
         raise "Missing bundled mesh: #{filename}" unless File.file?(path)
@@ -31,6 +34,7 @@ module ISOframe
         defn = existing || model.definitions.add(defn_name)
         defn.entities.clear! if defn.entities.size > 0
         build_obj_into!(defn.entities, path, color: color)
+        Geometry.soften_definition_edges!(defn) if defined?(Geometry)
         defn
       end
 

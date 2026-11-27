@@ -880,6 +880,40 @@ module ISOframe
         nil
       end
 
+      # v0.1.74: SoftWorks/STL SKP imports — soft+smooth+hide every edge so
+      # placed accessories (counters, tables, lights, wrap SKPs) read clean
+      # without hard mesh lines. Walks nested groups/components once.
+      def soften_definition_edges!(defn, seen = nil)
+        seen ||= {}
+        return unless defn && defn.valid?
+        return if seen[defn.object_id]
+        seen[defn.object_id] = true
+        soften_entities_edges!(defn.entities, seen)
+      rescue StandardError => e
+        puts "[ISOframe] soften_definition_edges! failed: #{e.message}"
+        nil
+      end
+
+      def soften_entities_edges!(ents, seen = nil)
+        seen ||= {}
+        return unless ents
+        ents.to_a.each do |e|
+          next unless e && e.valid?
+          if e.is_a?(Sketchup::Edge)
+            e.soft = true
+            e.smooth = true
+            e.hidden = true
+          elsif e.is_a?(Sketchup::ComponentInstance)
+            soften_definition_edges!(e.definition, seen)
+          elsif e.is_a?(Sketchup::Group)
+            soften_entities_edges!(e.entities, seen)
+          end
+        end
+      rescue StandardError => e
+        puts "[ISOframe] soften_entities_edges! failed: #{e.message}"
+        nil
+      end
+
       def dedupe_plan_points(plan_pts)
         return [] if plan_pts.nil?
         out = []
