@@ -1,16 +1,16 @@
 # frozen_string_literal: true
 # Keep floor-sitting ISOframe items on the floorspace top plane.
 #
-# v0.1.44: Wave Z-ONLY via origin. Never touch XY or rotation. Observers must
-# not start nested operations during Move (that cancelled moves / XY snap-back).
+# v0.1.44: Wave Z-ONLY. Never touch XY or rotation. Observers must not start
+# nested operations during Move (that cancelled moves / XY snap-back).
 #
-# v0.1.78: freestanding floor accessories (Oval Counter + KEY_FLOOR_SLIDE) also
-# Z-locked via world bounds min Z.
+# v0.1.78–79: freestanding + Wave share floor-sitting clamp.
 #
-# v0.1.79: ALL floor-sitting items share one clamp — Wave starter/extension +
-# freestanding accessories. Feet (world AABB min Z) → Floorspace.module_base_z.
-# XY slide + Z rotation OK. Tables and media screens (wall-plane siblings) are
-# excluded; host-follow / flex still call ensure_module_on_floor! for S+E.
+# v0.1.80: harden clamp — EntityObserver on each floor-sitting instance,
+# ModelObserver onTransactionCommit/Undo/Redo, ToolsObserver on tool change,
+# plus EntitiesObserver. Wave feet = world origin Z (place contract); freestanding
+# feet = world AABB min Z. Re-clamp after flex via ensure_module_on_floor!.
+# Tables / media screens still excluded.
 
 module ISOframe
   module StandDesigner
@@ -31,14 +31,35 @@ module ISOframe
       def attach!(model)
         return unless model
         @entity_observers ||= {}
+        @model_observers ||= {}
+        @tools_observers ||= {}
+        @instance_observers ||= {}
+
         unless @entity_observers[model.object_id]
           obs = ModuleZObserver.new
           model.entities.add_observer(obs)
           @entity_observers[model.object_id] = obs
         end
-        # Note: no ModelObserver onTransactionCommit — that re-ran snaps after
-        # every edit and, with nested ops, fought the Move tool (XY snap-back).
+
+        unless @model_observers[model.object_id]
+          mobs = FloorModelObserver.new
+          model.add_observer(mobs)
+          @model_observers[model.object_id] = mobs
+        end
+
+        begin
+          tools = model.tools
+          if tools && !@tools_observers[model.object_id]
+            tobs = FloorToolsObserver.new
+            tools.add_observer(tobs)
+            @tools_observers[model.object_id] = tobs
+          end
+        rescue StandardError => e
+          puts "[ISOframe] ToolsObserver attach failed: #{e.message}"
+        end
+
         Floorspace.ensure_locked!(model)
+        watch_all_floor_sitting!(model)
         snap_all_floor_sitting!(model)
         Tables.install_erase_observer!(model) if defined?(Tables)
         Screens.install_erase_observer!(model) if defined?(Screens)
@@ -91,7 +112,29 @@ module ISOframe
       def mark_floor_slide!(entity)
         return unless entity && entity.valid?
         Attributes.set(entity, Constants::KEY_FLOOR_SLIDE, '1')
+        watch_entity!(entity)
         entity
+      end
+
+      def watch_entity!(entity)
+        return unless entity && entity.valid? && floor_sitting?(entity)
+        @instance_observers ||= {}
+        eid = entity.entityID
+        return if @instance_observers[eid]
+        obs = FloorEntityObserver.new
+        entity.add_observer(obs)
+        @instance_observers[eid] = obs
+      rescue StandardError => e
+        puts "[ISOframe] watch_entity! failed: #{e.message}"
+      end
+
+      def watch_all_floor_sitting!(model)
+        return unless model
+        each_wave_module(model) { |ent| watch_entity!(ent) }
+        model.active_entities.grep(Sketchup::ComponentInstance).each do |ent|
+          next unless freestanding_floor?(ent)
+          watch_entity!(ent)
+        end
       end
 
       # Top-level modules: transformation.origin is world origin.
@@ -113,9 +156,13 @@ module ISOframe
         entity.transformation.origin.z
       end
 
-      # World Z of the lowest point (feet). Falls back to origin Z.
+      # Wave: origin Z is the foot sole (place contract).
+      # Freestanding: world AABB min Z (feet of baked mesh).
       def world_feet_z(entity)
-        return world_origin_z(entity) unless entity && entity.valid?
+        return 0.0 unless entity && entity.valid?
+        if isoframe_module?(entity)
+          return world_origin_z(entity)
+        end
         bb = entity.bounds
         return world_origin_z(entity) if bb.nil? || bb.empty?
         bb.min.z
@@ -126,12 +173,25 @@ module ISOframe
       # Pure Z translation. Preserves XY + rotation. Feet → floorspace top.
       def snap_floor_sitting_to_floor!(entity)
         return false unless floor_sitting?(entity)
+        watch_entity!(entity)
         target = Floorspace.module_base_z(entity.model)
         z = world_feet_z(entity)
         dz = target - z
         return false if dz.abs <= Z_TOL
         entity.transform!(Geom::Transformation.translation(Geom::Vector3d.new(0, 0, dz)))
         true
+      rescue StandardError
+        false
+      end
+
+      def correct_entity_z!(entity)
+        return false if correcting?
+        return false unless entity && entity.valid?
+        return false unless floor_sitting?(entity)
+        target = Floorspace.module_base_z(entity.model)
+        z = world_feet_z(entity)
+        return false if (z - target).abs <= Z_TOL
+        with_correcting { snap_floor_sitting_to_floor!(entity) }
       rescue StandardError
         false
       end
@@ -162,8 +222,12 @@ module ISOframe
       end
 
       def snap_all_floor_sitting!(model)
-        snap_all_modules!(model)
-        snap_all_freestanding!(model)
+        return unless model
+        return if correcting?
+        with_correcting do
+          snap_all_modules!(model)
+          snap_all_freestanding!(model)
+        end
       end
 
       def each_wave_module(model, &block)
@@ -182,8 +246,6 @@ module ISOframe
           if e.is_a?(Sketchup::Group)
             walk_entities(e.entities, &block)
           end
-          # Do NOT walk into arbitrary component definitions — that found nested
-          # non-scene geometry and caused spurious corrections.
         end
       end
 
@@ -211,31 +273,53 @@ module ISOframe
         end
       end
 
-      # Live Move: correct Z only, with NO nested start_operation (nested ops
-      # abort the Move tool and restore the pre-move transform → XY snap-back).
+      # Live Move: correct Z only, with NO nested start_operation.
       class ModuleZObserver < Sketchup::EntitiesObserver
         def onElementAdded(_entities, entity)
-          correct_z_only(entity)
+          Constraints.watch_entity!(entity) if Constraints.floor_sitting?(entity)
+          Constraints.correct_entity_z!(entity)
         end
 
         def onElementModified(_entities, entity)
-          correct_z_only(entity)
+          Constraints.correct_entity_z!(entity)
+        end
+      end
+
+      # Fires when a watched instance's transform changes (native Move included).
+      class FloorEntityObserver < Sketchup::EntityObserver
+        def onChangeEntity(entity)
+          Constraints.correct_entity_z!(entity)
+        rescue StandardError
+          nil
+        end
+      end
+
+      # After any operation (Move commit, Flex, etc.) re-clamp all floor-sitters.
+      class FloorModelObserver < Sketchup::ModelObserver
+        def onTransactionCommit(model)
+          Constraints.snap_all_floor_sitting!(model)
+        rescue StandardError
+          nil
         end
 
-        private
+        def onTransactionUndo(model)
+          Constraints.snap_all_floor_sitting!(model)
+        rescue StandardError
+          nil
+        end
 
-        def correct_z_only(entity)
-          return if Constraints.correcting?
-          return unless entity && entity.valid?
-          return unless Constraints.floor_sitting?(entity)
+        def onTransactionRedo(model)
+          Constraints.snap_all_floor_sitting!(model)
+        rescue StandardError
+          nil
+        end
+      end
 
-          target = Floorspace.module_base_z(entity.model)
-          z = Constraints.world_feet_z(entity)
-          return if (z - target).abs <= Constraints::Z_TOL
-
-          Constraints.with_correcting do
-            Constraints.snap_floor_sitting_to_floor!(entity)
-          end
+      # When leaving Move (or any tool change), snap feet again.
+      class FloorToolsObserver < Sketchup::ToolsObserver
+        def onActiveToolChanged(tools, _tool_name)
+          model = (tools.respond_to?(:model) ? tools.model : nil) || Sketchup.active_model
+          Constraints.snap_all_floor_sitting!(model)
         rescue StandardError
           nil
         end
