@@ -34,6 +34,7 @@ module ISOframe
         Floorspace.ensure_locked!(model)
         snap_all_modules!(model)
         Tables.install_erase_observer!(model) if defined?(Tables)
+        Screens.install_erase_observer!(model) if defined?(Screens)
       rescue StandardError => e
         puts "[ISOframe] Constraints.attach! failed: #{e.message}"
       end

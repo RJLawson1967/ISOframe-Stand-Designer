@@ -198,6 +198,7 @@ module ISOframe
           pin_world_right_post!(inst, angle, pin_point, pin_yaw_deg)
           # Pin adjusts host world pose after rebuild — keep sibling table glued.
           Tables.reposition_table_for_host!(inst) if defined?(Tables) && Tables.table_on?(inst)
+          Screens.reposition_screen_for_host!(inst) if defined?(Screens) && Screens.screen_on?(inst)
         end
         inst
       end

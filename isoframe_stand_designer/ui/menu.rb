@@ -28,6 +28,8 @@ module ISOframe
         menu.add_item('Semi-circular table attachment') { Tools::AddTable.toggle_selected!('semi_circular') }
         menu.add_item('Square Table attachment') { Tools::AddTable.toggle_selected!('square') }
         menu.add_item('Oval Counter') { Counters.place_selected!('oval') }
+        menu.add_item('Media Screen Small') { Tools::AddScreen.toggle_selected!('small') }
+        menu.add_item('Media Screen Large') { Tools::AddScreen.toggle_selected!('large') }
         menu.add_separator
         menu.add_item('Panel…') { Dialog.show! }
         menu.add_item('License…') { License.prompt_and_set! }

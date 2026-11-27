@@ -69,6 +69,7 @@ module ISOframe
           flex = Attributes.get(inst, Constants::KEY_FLEX, 0.0).to_f
           range = Attributes.get(inst, Constants::KEY_RANGE, Constants::RANGE_WAVE)
           table = Attributes.get(inst, Constants::KEY_TABLE_TYPE, '').to_s
+          screen = Attributes.get(inst, Constants::KEY_SCREEN_TYPE, '').to_s
 
           defn = Geometry.definition_for(inst.model, type, height_key)
           inst.definition = defn
@@ -81,17 +82,20 @@ module ISOframe
             range: range
           )
           Attributes.set(inst, Constants::KEY_TABLE_TYPE, table) unless table.empty?
+          Attributes.set(inst, Constants::KEY_SCREEN_TYPE, screen) unless screen.empty?
 
-          if flex.abs >= 0.5 && table.empty?
+          locked_straight = !table.empty? || !screen.empty?
+          if flex.abs >= 0.5 && !locked_straight
             Geometry.apply_flex_to_instance!(inst, flex)
           else
-            # Straight (or table-locked straight): unique def + accessories.
-            if flex.abs >= 0.5 && !table.empty?
+            # Straight (or table/screen-locked straight): unique def + accessories.
+            if flex.abs >= 0.5 && locked_straight
               Attributes.set(inst, Constants::KEY_FLEX, 0.0)
               flex = 0.0
             end
             Lights.sync!(inst) if defined?(Lights)
             Tables.sync!(inst) if defined?(Tables)
+            Screens.reposition_screen_for_host!(inst) if defined?(Screens) && !screen.empty?
             Artwork.reapply_after_rebuild!(inst) if defined?(Artwork)
           end
           Constraints.ensure_module_on_floor!(inst)

@@ -19,6 +19,7 @@ module ISOframe
         lights
         tables
         counters
+        screens
         artwork
         constraints
         tools/place_starter
@@ -28,6 +29,7 @@ module ISOframe
         tools/height_swap
         tools/add_light
         tools/add_table
+        tools/add_screen
         ui/dialog
         ui/menu
       ]
