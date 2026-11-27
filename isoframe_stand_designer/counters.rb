@@ -5,6 +5,8 @@
 # v0.1.72: Oval Counter from Oval_Counter.skp (full wraparound graphic body).
 # SKP is a scene with Freestanding Counter Ellipse.STL (+ floorspace / Sree);
 # bake only the counter mesh into a plugin definition.
+# v0.1.73: STL/CAD import lies on its side in SketchUp (Y-up). LOCK upright bake:
+# +90° about +X so feet sit on the floor (min Z); then translate so min Z = 0.
 
 module ISOframe
   module StandDesigner
@@ -16,10 +18,15 @@ module ISOframe
           kind: 'oval',
           label: 'Oval Counter',
           skp_file: 'Oval_Counter.skp',
-          defn_name: 'ISOframe Counter Oval v72',
+          # Fresh name so dealers drop the sideways v72 bake.
+          defn_name: 'ISOframe Counter Oval v73',
           instance_name: 'ISOframe Oval Counter'
         }
       }.freeze
+
+      # LOCKED v0.1.73 — STL Y-up → SketchUp Z-up. Do not change unless Richard asks.
+      # +90° about +X maps source +Y → world +Z (feet toward −Z / floor).
+      OVAL_UPRIGHT_ROT_X_DEG = 90.0
 
       SKIP_NAME_RE = /
         \bsree\b|
@@ -93,15 +100,43 @@ module ISOframe
         defn = existing || model.definitions.add(defn_name)
         defn.entities.clear! if defn.entities.size > 0
 
-        # Sit the bake so its lowest Z is 0 (feet on floor plane of the def).
-        bb = src.bounds
-        dz = bb ? -bb.min.z : 0.0
-        local = Geom::Transformation.translation(Geom::Vector3d.new(0, 0, dz))
+        local = upright_sit_transform(src, kind)
         inst = defn.entities.add_instance(src, local)
         inst.name = entry[:instance_name] if inst.respond_to?(:name=)
         puts "[ISOframe] Counter bake kind=#{kind} src=#{src.name.inspect} " \
-             "entities=#{defn.entities.size}"
+             "upright_x=#{OVAL_UPRIGHT_ROT_X_DEG}° entities=#{defn.entities.size}"
         defn
+      end
+
+      # Rotate source upright, then translate so feet (min Z) sit on Z=0.
+      def upright_sit_transform(src, kind = 'oval')
+        origin = Geom::Point3d.new(0, 0, 0)
+        x_axis = Geom::Vector3d.new(1, 0, 0)
+        rot = Geom::Transformation.rotation(
+          origin, x_axis, OVAL_UPRIGHT_ROT_X_DEG * Math::PI / 180.0
+        )
+        bb = src.bounds
+        if bb.nil? || bb.empty?
+          puts "[ISOframe] Counter upright: no bounds; rotation only"
+          return rot
+        end
+        # Transform the eight corners to find post-rotation min Z (feet).
+        corners = [
+          Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z),
+          Geom::Point3d.new(bb.min.x, bb.min.y, bb.max.z),
+          Geom::Point3d.new(bb.min.x, bb.max.y, bb.min.z),
+          Geom::Point3d.new(bb.min.x, bb.max.y, bb.max.z),
+          Geom::Point3d.new(bb.max.x, bb.min.y, bb.min.z),
+          Geom::Point3d.new(bb.max.x, bb.min.y, bb.max.z),
+          Geom::Point3d.new(bb.max.x, bb.max.y, bb.min.z),
+          Geom::Point3d.new(bb.max.x, bb.max.y, bb.max.z)
+        ]
+        zs = corners.map { |p| p.transform(rot).z }
+        dz = -zs.min
+        sit = Geom::Transformation.translation(Geom::Vector3d.new(0, 0, dz))
+        puts "[ISOframe] Counter upright kind=#{kind} rotX=#{OVAL_UPRIGHT_ROT_X_DEG}° " \
+             "sit_z_mm=#{(dz / 1.mm).round(1)}"
+        sit * rot
       end
 
       def pick_counter_source(model, root)
