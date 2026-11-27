@@ -31,7 +31,7 @@ module ISOframe
           scrollable: true,
           resizable: true,
           width: 210,
-          height: 540,
+          height: 600,
           style: UI::HtmlDialog::STYLE_DIALOG
         )
 
@@ -66,13 +66,13 @@ module ISOframe
           Sketchup.active_model.select_tool(Tools::FlexTool.new)
         end
         bind.call('run_height') { Tools::HeightSwap.swap_selected! }
-        bind.call('run_artwork') { Artwork.prompt_and_apply! }
-        bind.call('run_table_artwork') { Artwork.prompt_and_apply_table! }
+        bind.call('run_artwork') { Artwork.prompt_and_add! }
         bind.call('run_light_left') { Tools::AddLight.toggle_selected!(:left) }
         bind.call('run_light_right') { Tools::AddLight.toggle_selected!(:right) }
         bind.call('run_table_keyboard') { Tools::AddTable.toggle_selected!('keyboard') }
         bind.call('run_table_semi_circular') { Tools::AddTable.toggle_selected!('semi_circular') }
         bind.call('run_table_square') { Tools::AddTable.toggle_selected!('square') }
+        bind.call('run_counter_oval') { Counters.place_selected!('oval') }
       end
     end
   end

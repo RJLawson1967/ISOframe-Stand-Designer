@@ -7,6 +7,7 @@ module ISOframe
       TYPE_STARTER = 'starter'
       TYPE_EXTENSION = 'extension'
       TYPE_FLOORSPACE = 'floorspace'
+      TYPE_COUNTER = 'counter'
       POST_MM = 37.0
       HALF_POST_MM = POST_MM / 2.0
       GRAPHIC_BAY_MM = 800.0
@@ -60,6 +61,9 @@ module ISOframe
       KEY_TABLE_KIND = 'table_kind'
       # Under-table graphic artwork (separate from wall wallpaper).
       KEY_TABLE_ARTWORK_PATH = 'table_artwork_image_path'
+      # Freestanding counter (Oval first) — not attached to Wave S/E.
+      KEY_COUNTER_KIND = 'counter_kind'
+      KEY_COUNTER_ARTWORK_PATH = 'counter_artwork_image_path'
       # Local-left post is always the definition hinge; Fix Right reparameterizes
       # the instance transform so the local-right post is fixed in world.
       HINGE_LEFT = 'left'

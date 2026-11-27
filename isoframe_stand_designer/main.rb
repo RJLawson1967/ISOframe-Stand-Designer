@@ -18,10 +18,12 @@ module ISOframe
         geometry
         lights
         tables
+        counters
         artwork
         constraints
         tools/place_starter
         tools/place_extension
+        tools/place_counter
         tools/flex_tool
         tools/height_swap
         tools/add_light
