@@ -4,6 +4,10 @@
 #
 # v0.1.44: Z-ONLY. Never touch XY or rotation. Observers must not start nested
 # operations during Move (that cancelled moves and snapped modules back in XY).
+#
+# v0.1.78: freestanding floor accessories (Oval Counter + any KEY_FLOOR_SLIDE
+# instance) also Z-locked — world bounds min Z = floorspace top. XY slide and
+# Z-axis rotation allowed. Does NOT apply to Wave S/E, tables, or media screens.
 
 module ISOframe
   module StandDesigner
@@ -33,6 +37,7 @@ module ISOframe
         # every edit and, with nested ops, fought the Move tool (XY snap-back).
         Floorspace.ensure_locked!(model)
         snap_all_modules!(model)
+        snap_all_freestanding!(model)
         Tables.install_erase_observer!(model) if defined?(Tables)
         Screens.install_erase_observer!(model) if defined?(Screens)
       rescue StandardError => e
@@ -58,6 +63,25 @@ module ISOframe
         return false unless entity.is_a?(Sketchup::ComponentInstance) || entity.is_a?(Sketchup::Group)
         type = Attributes.get(entity, Constants::KEY_TYPE)
         type == Constants::TYPE_STARTER || type == Constants::TYPE_EXTENSION
+      end
+
+      # Freestanding floor accessory: Oval Counter (and future floor-placed
+      # items tagged KEY_FLOOR_SLIDE). Never Wave / table / screen siblings.
+      def freestanding_floor?(entity)
+        return false unless entity && entity.valid?
+        return false unless entity.is_a?(Sketchup::ComponentInstance)
+        return false if isoframe_module?(entity)
+        return false if defined?(Tables) && Tables.table_instance?(entity)
+        return false if defined?(Screens) && Screens.screen_instance?(entity)
+        slide = Attributes.get(entity, Constants::KEY_FLOOR_SLIDE, '').to_s
+        return true if slide == '1' || slide.downcase == 'true'
+        Attributes.get(entity, Constants::KEY_TYPE).to_s == Constants::TYPE_COUNTER
+      end
+
+      def mark_floor_slide!(entity)
+        return unless entity && entity.valid?
+        Attributes.set(entity, Constants::KEY_FLOOR_SLIDE, '1')
+        entity
       end
 
       # Top-level modules: transformation.origin is world origin.
@@ -92,9 +116,32 @@ module ISOframe
         false
       end
 
+      # Clamp freestanding feet (world AABB min Z) to floorspace top.
+      # Pure Z translation — XY slide and Z rotation preserved.
+      def snap_freestanding_to_floor!(entity)
+        return false unless freestanding_floor?(entity)
+        target = Floorspace.module_base_z(entity.model)
+        bb = entity.bounds
+        return false if bb.nil? || bb.empty?
+        dz = target - bb.min.z
+        return false if dz.abs <= Z_TOL
+        entity.transform!(Geom::Transformation.translation(Geom::Vector3d.new(0, 0, dz)))
+        true
+      rescue StandardError
+        false
+      end
+
       def snap_all_modules!(model)
         return unless model
         each_wave_module(model) { |ent| snap_z_to_floor!(ent) }
+      end
+
+      def snap_all_freestanding!(model)
+        return unless model
+        model.active_entities.grep(Sketchup::ComponentInstance).each do |ent|
+          next unless freestanding_floor?(ent)
+          snap_freestanding_to_floor!(ent)
+        end
       end
 
       def each_wave_module(model, &block)
@@ -120,6 +167,11 @@ module ISOframe
 
       def ensure_module_on_floor!(entity)
         snap_z_to_floor!(entity)
+      end
+
+      def ensure_freestanding_on_floor!(entity)
+        mark_floor_slide!(entity)
+        snap_freestanding_to_floor!(entity)
       end
 
       class AppObs < Sketchup::AppObserver
@@ -152,14 +204,22 @@ module ISOframe
         def correct_z_only(entity)
           return if Constraints.correcting?
           return unless entity && entity.valid?
-          return unless Constraints.isoframe_module?(entity)
 
-          target = Floorspace.module_base_z(entity.model)
-          z = Constraints.world_origin_z(entity)
-          return if (z - target).abs <= Constraints::Z_TOL
-
-          Constraints.with_correcting do
-            Constraints.snap_z_to_floor!(entity)
+          if Constraints.isoframe_module?(entity)
+            target = Floorspace.module_base_z(entity.model)
+            z = Constraints.world_origin_z(entity)
+            return if (z - target).abs <= Constraints::Z_TOL
+            Constraints.with_correcting do
+              Constraints.snap_z_to_floor!(entity)
+            end
+          elsif Constraints.freestanding_floor?(entity)
+            target = Floorspace.module_base_z(entity.model)
+            bb = entity.bounds
+            return if bb.nil? || bb.empty?
+            return if (bb.min.z - target).abs <= Constraints::Z_TOL
+            Constraints.with_correcting do
+              Constraints.snap_freestanding_to_floor!(entity)
+            end
           end
         rescue StandardError
           nil
