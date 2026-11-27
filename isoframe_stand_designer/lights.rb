@@ -5,6 +5,8 @@
 # v0.1.48: bake arm → graphic +Y (measure + explode). Mesh untouched.
 # v0.1.50: +20.1° CCW from above (undo over-rotation) — LOCKED plan yaw.
 # v0.1.51: both L/R shift 70.7 mm viewer-left (graphic-front) + 10 mm down.
+# v0.1.79: soft/smooth/hide edges stay on LED flood SKP + legacy OBJ flood only
+# (other imports show hard edges again).
 
 module ISOframe
   module StandDesigner
@@ -174,11 +176,13 @@ module ISOframe
 
       def legacy_obj_definition!(model)
         # OBJ arm is already authored along +Y (graphic front) — no plan bake.
+        # Soft edges LOCKED for flood OBJ (v0.1.79 lights-only soften).
         MeshImport.definition_from_obj!(
           model,
           'ISOframe Flood Light v38',
           'flood_light.obj',
-          color: Sketchup::Color.new(48, 52, 58)
+          color: Sketchup::Color.new(48, 52, 58),
+          soften: true
         )
       end
 

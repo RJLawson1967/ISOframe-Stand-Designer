@@ -6,7 +6,6 @@
 #   - Centre of screen 1500 mm above floor (module Z = floor top)
 #   - Screen 50 mm in front of graphic outer face
 #   - Centred on the bay (midpoint of hinge/free posts)
-#   - Soft edges via Geometry.soften_definition_edges!
 # v0.1.76: replace oversized (~2000 m) Samsung SKPs with Richard’s new
 # Media_screen_-_{small,Large}.skp. Fresh defn names. Strip Sree scale figure
 # from Large. Metres-correct bake: if largest axis > 10 m, scale ×0.001
@@ -14,6 +13,7 @@
 # v0.1.77: bake ONLY from the loaded SKP root (do not scan the whole model —
 # that reused Small when placing Large). LOCK landscape: +90° about +Y so
 # portrait SKPs become landscape. Attach position locks unchanged.
+# v0.1.79: edges ON (no soften on screen bake) — lights keep soft edges.
 
 module ISOframe
   module StandDesigner
@@ -25,15 +25,15 @@ module ISOframe
           kind: 'small',
           label: 'Media Screen Small',
           skp_file: 'Media_screen_-_small.skp',
-          # Fresh name so dealers drop any cached v75–v76 bake.
-          defn_name: 'ISOframe Media Screen Small v77',
+          # Fresh name so dealers drop soft-edged v75–v78 bakes.
+          defn_name: 'ISOframe Media Screen Small v79',
           instance_name: 'ISOframe Media Screen Small'
         },
         'large' => {
           kind: 'large',
           label: 'Media Screen Large',
           skp_file: 'Media_screen_-_Large.skp',
-          defn_name: 'ISOframe Media Screen Large v77',
+          defn_name: 'ISOframe Media Screen Large v79',
           instance_name: 'ISOframe Media Screen Large'
         }
       }.freeze
@@ -226,7 +226,6 @@ module ISOframe
         defn_name = entry[:defn_name]
         existing = model.definitions[defn_name]
         if existing && !existing.image? && existing.entities.size > 0
-          Geometry.soften_definition_edges!(existing)
           return existing
         end
 
@@ -261,7 +260,6 @@ module ISOframe
         local = metres_correct_transform(src, local)
         inst = defn.entities.add_instance(src, local)
         inst.name = entry[:instance_name] if inst.respond_to?(:name=)
-        Geometry.soften_definition_edges!(defn)
         dims = oriented_extent_mm(src, local)
         puts "[ISOframe] Media screen bake kind=#{entry[:kind]} skp=#{skp_name} " \
              "src=#{src.name.inspect} landscape_y=#{LANDSCAPE_ROT_Y_DEG}° " \
