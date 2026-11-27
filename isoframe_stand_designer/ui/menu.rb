@@ -26,6 +26,8 @@ module ISOframe
         menu.add_item('Add Light Right') { Tools::AddLight.toggle_selected!(:right) }
         menu.add_separator
         menu.add_item('Keyboard Table') { Tools::AddTable.toggle_selected!('keyboard') }
+        menu.add_item('Semi-circular table attachment') { Tools::AddTable.toggle_selected!('semi_circular') }
+        menu.add_item('Square Table attachment') { Tools::AddTable.toggle_selected!('square') }
         menu.add_separator
         menu.add_item('Panel…') { Dialog.show! }
         menu.add_item('License…') { License.prompt_and_set! }

@@ -62,6 +62,11 @@
 # v0.1.70: after load, dump ALL definition names; match broadly (DC truncates at ^
 # to "Keyboard Attachment wrap", plus GraphicHint / keyboard attachment / Rolable).
 # Place must always succeed — geometry/root fallback if name match fails.
+# v0.1.71: Place path reverts to table-SKP-only (no place-time wrap SKP load /
+# broad-match / root fallback that spawned a distant orphan wrap). Apply Table
+# Artwork is untouched and still calls ensure_graphic_wrap_target! on apply.
+# Also: Semi-circular + Square table attachments — same S+E host attach, offsets,
+# orientation, flexilink delete, and host-follow as Keyboard; shape SKP only differs.
 
 module ISOframe
   module StandDesigner
@@ -70,12 +75,31 @@ module ISOframe
 
       REGISTRY = {
         'keyboard' => {
+          kind: 'keyboard',
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v69 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v70',
+          # Fresh name so dealers drop any cached v43–v70 bake.
+          defn_name: 'ISOframe Table Keyboard SKP v71',
           instance_name: 'ISOframe Keyboard Table',
+          graphic_group: 'TableGraphicHint'
+        },
+        'semi_circular' => {
+          kind: 'semi_circular',
+          label: 'Semi-circular table attachment',
+          straight_only: true,
+          skp_file: 'Semi-circular_Table_Attachment.skp',
+          defn_name: 'ISOframe Table Semi-circular SKP v71',
+          instance_name: 'ISOframe Semi-circular Table',
+          graphic_group: 'TableGraphicHint'
+        },
+        'square' => {
+          kind: 'square',
+          label: 'Square Table attachment',
+          straight_only: true,
+          skp_file: 'Square_Table_Attachment.skp',
+          defn_name: 'ISOframe Table Square SKP v71',
+          instance_name: 'ISOframe Square Table',
           graphic_group: 'TableGraphicHint'
         }
       }.freeze
@@ -128,24 +152,40 @@ module ISOframe
       KEY_SYNTHETIC_TABLE_GRAPHIC = 'isoframe_synthetic_table_graphic'
 
       SKP_KEYBOARD = 'Keyboard_with_Extension.skp'
-      # Definition names in Keyboard_with_Extension.skp (Richard):
-      #   "Keyboard Attachment wrap" (± DC suffix after ^)
-      #   "Keyboard table attachment_Graphic Keyboard Attachment (Rolable)"
-      # Instance name in the assembly: "keyboard attachment"
-      # Do NOT require "keyboard" immediately before "attachment" — "table" sits between.
-      KB_DEF_RE = /keyboard.*attach|attach.*keyboard/i
-      KB_INSTANCE_RE = /keyboard\s*(table\s*)?attachment/i
-      KB_WRAP_RE = /keyboard\s*attachment\s*wrap/i
-      # Loose parts to gather if no single keyboard component (v0.1.43-style fallback).
+      # Attachment assembly names across Keyboard / Semi-circular / Square SKPs:
+      #   "Keyboard Attachment wrap" / "keyboard attachment"
+      #   "Semicircle Attachment Wrap" / "Semicircle table attachment"
+      #   "Square Attachment Wrap" / "square attachement" (SKP typo kept)
+      # Do NOT require the shape word immediately before "attachment".
+      KB_DEF_RE = /
+        keyboard.*attach|attach.*keyboard|
+        semicircle.*attach|semi[-\s]*circle.*attach|
+        square.*attach|attach.*square
+      /ix
+      KB_INSTANCE_RE = /
+        keyboard\s*(table\s*)?attachment|
+        semicircle\s*(table\s*)?attachment|
+        semi[-\s]*circular\s*(table\s*)?attachment|
+        square\s*(table\s*)?attach
+      /ix
+      KB_WRAP_RE = /
+        keyboard\s*attachment\s*wrap|
+        semicircle\s*attachment\s*wrap|
+        square\s*attachment\s*wrap
+      /ix
+      # Loose parts to gather if no single attachment component (v0.1.43-style fallback).
       KEEP_PART_RE = /
         keyboard|
+        semicircle|
+        semi[-\s]*circle|
+        square|
         attachment\s*wrap|
         table\s*attachment|
         table\s*post|
         \b763\b|
         beam\s*straight|
         t-?box|
-        keyboard\s*(base|lip|top)|
+        (?:keyboard|semi\s*circle|semicircle|square)\s*(base|lip|top)|
         adjustable\s*foot
       /ix
       SKIP_PART_RE = /
@@ -228,7 +268,7 @@ module ISOframe
         end
         if insts.empty?
           UI.messagebox(
-            'Select a straight Wave starter or extension, then Keyboard Table.'
+            "Select a straight Wave starter or extension, then #{label_for(type_key)}."
           )
           return false
         end
@@ -364,13 +404,16 @@ module ISOframe
           Attributes.set(host, Constants::KEY_MODULE_ID, mid)
         end
 
+        type_key = entry[:kind].to_s
+        type_key = 'keyboard' if type_key.empty?
+
         table_defn = keyboard_definition!(model, entry)
         local = attach_local_transform(model, entry)
         world_tr = host.transformation * local
 
         inst = model.active_entities.add_instance(table_defn, world_tr)
         inst.name = entry[:instance_name]
-        Attributes.set(inst, Constants::KEY_TABLE_KIND, 'keyboard')
+        Attributes.set(inst, Constants::KEY_TABLE_KIND, type_key.to_s)
         Attributes.set(inst, Constants::KEY_TABLE_HOST, mid.to_s)
         # Carry any prior table artwork path from host → new sibling.
         prior = Attributes.get(host, Constants::KEY_TABLE_ARTWORK_PATH, '').to_s
@@ -474,21 +517,22 @@ module ISOframe
         existing = model.definitions[defn_name]
         return existing if existing && !existing.image? && existing.entities.size > 0
 
-        path = MeshImport.model_path(entry[:skp_file] || SKP_KEYBOARD)
+        skp_name = entry[:skp_file] || SKP_KEYBOARD
+        path = MeshImport.model_path(skp_name)
         raise "Missing bundled SKP: #{File.basename(path)}" unless File.file?(path)
 
         root = ensure_skp_imported!(model, path)
         kb_src, kb_inst, how = resolve_keyboard_source(model, root)
         unless kb_src || kb_inst
           sample = sample_skp_def_names(model)
-          raise 'SKP has no keyboard table definition/instance ' \
-                "(looked for Keyboard Attachment wrap / keyboard attachment). " \
+          raise "SKP has no table attachment definition/instance " \
+                "(looked for Attachment wrap / table attachment in #{File.basename(path)}). " \
                 "Defs sample: #{sample}"
         end
 
         local = discover_attach_local(root, model, kb_src, kb_inst)
         local = apply_keyboard_orientation_correction(local)
-        puts "[ISOframe] Keyboard source=#{how}; attach local origin mm: " \
+        puts "[ISOframe] Table source=#{how} skp=#{File.basename(path)}; attach local origin mm: " \
              "#{(local.origin.x.to_f / 1.mm).round(1)}, " \
              "#{(local.origin.y.to_f / 1.mm).round(1)}, " \
              "#{(local.origin.z.to_f / 1.mm).round(1)}; " \
@@ -497,43 +541,43 @@ module ISOframe
         defn = existing || model.definitions.add(defn_name)
         defn.entities.clear! if defn.entities.size > 0
 
+        attach_label = entry[:instance_name].to_s.empty? ? 'ISOframe Table Attachment' : entry[:instance_name].to_s
         if kb_src
-          # Keep the wrap as a nested instance (v0.1.58). Exploding DC wraps was
+          # Keep the attachment as a nested instance (v0.1.58). Exploding DC wraps was
           # converting/renaming nested lip parts so Apply Artwork could not find
           # "keyboard lip". Pose stays on this instance transform.
           wrap_inst = defn.entities.add_instance(kb_src, local)
-          wrap_inst.name = 'ISOframe Keyboard Attachment' if wrap_inst.respond_to?(:name=)
+          wrap_inst.name = attach_label if wrap_inst.respond_to?(:name=)
         elsif kb_inst.is_a?(Sketchup::Group)
           # Copy group contents already transformed into Wave-local via local.
           copy_entities_transformed!(kb_inst.entities, defn.entities, local)
         elsif kb_inst.is_a?(Sketchup::ComponentInstance)
           wrap_inst = defn.entities.add_instance(kb_inst.definition, local * kb_inst.transformation)
-          wrap_inst.name = 'ISOframe Keyboard Attachment' if wrap_inst.respond_to?(:name=)
+          wrap_inst.name = attach_label if wrap_inst.respond_to?(:name=)
         else
-          raise 'Keyboard source unresolved after match'
+          raise 'Table source unresolved after match'
         end
 
         # If bake still empty, gather loose SKP parts (beams/base/wrap/…).
         if defn.entities.size == 0
           baked = bake_keyboard_parts_from_skp!(defn, root, model, local)
-          puts "[ISOframe] Keyboard parts bake count=#{baked}"
+          puts "[ISOframe] Table parts bake count=#{baked}"
         end
-        raise 'Baked keyboard definition is empty' if defn.entities.size == 0
+        raise 'Baked table definition is empty' if defn.entities.size == 0
 
         purge_synthetic_table_graphic_panels!(defn)
         # Attribute-tag only — do not rename lip (Groups would lose "keyboard lip").
         mark_table_graphic_targets!(defn)
-        # Ensure Graphic Keyboard Attachment (Rolable) is present for Apply Artwork.
-        wrap_hit = ensure_graphic_wrap_target!(defn, model)
+        # v0.1.71: do NOT load/instance Keyboard_table_graphic_wrap.skp on Place.
+        # v0.1.70 broad match + root fallback spawned a distant orphan wrap.
+        # Apply Table Artwork still calls ensure_graphic_wrap_target! on apply only.
         dump = dump_baked_entity_names(defn.entities, 0)
-        puts "[ISOframe] Keyboard bake entities: #{dump}"
+        puts "[ISOframe] Table bake entities: #{dump}"
         lip = find_keyboard_lip_entity(defn.entities, 0)
-        puts "[ISOframe] Keyboard lip after bake=" \
+        puts "[ISOframe] Table lip after bake=" \
              "#{lip ? "#{lip.class} name=#{lip.name} def=#{lip.respond_to?(:definition) ? lip.definition.name : '-'}" : 'NONE'}"
-        puts "[ISOframe] Graphic wrap after bake=" \
-             "#{wrap_hit && wrap_hit[0] ? "#{wrap_hit[0].name} / #{def_name_of(wrap_hit[0])}" : 'NONE'}"
-        # Pose on nested wrap instance; placement keeps Wave-local XY offset
-        # (LOCKED v0.1.56) relative to the host.
+        # Pose on nested attachment instance; placement keeps Wave-local XY offset
+        # (LOCKED v0.1.56) relative to the host — shared by Keyboard/Semi/Square.
         cache_attach_local!(model, placement_offset_transform)
         defn
       end
@@ -585,7 +629,9 @@ module ISOframe
       def part_only_definition?(defn)
         n = defn.name.to_s
         return true if n =~ /keyboard\s*(base|lip|top)/i
-        return true if n =~ /table\s*attachment\s*keyboard\s*(base|top)/i
+        return true if n =~ /semi\s*circle\s*(base|lip|top)|semicircle\s*(base|lip|top)/i
+        return true if n =~ /square\s*(base|lip|top)/i
+        return true if n =~ /table\s*attachment\s*(keyboard|semicircle|semi\s*circle|square)\s*(base|top)/i
         return true if n =~ /\b763\b|beam\s*straight|t-?box|table\s*post|adjustable\s*foot/i
         # Tiny entity count often means a single extrusion, not the full desk.
         begin
@@ -766,7 +812,11 @@ module ISOframe
           n =~ /Keyboard_Extension_Module/i ||
           n =~ /keyboard.extension.module/i ||
           n =~ /Keyboard_table_graphic_wrap/i ||
-          n =~ /keyboard.table.graphic.wrap/i
+          n =~ /keyboard.table.graphic.wrap/i ||
+          n =~ /Semi-?circular_Table_Attachment/i ||
+          n =~ /semi.?circular.?table.?attachment/i ||
+          n =~ /Square_Table_Attachment/i ||
+          n =~ /square.?table.?attachment/i
       end
 
       INSTANCED_WRAP_NAME = 'ISOframe Graphic Keyboard Wrap'

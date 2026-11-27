@@ -31,7 +31,7 @@ module ISOframe
           scrollable: true,
           resizable: true,
           width: 210,
-          height: 460,
+          height: 540,
           style: UI::HtmlDialog::STYLE_DIALOG
         )
 
@@ -71,6 +71,8 @@ module ISOframe
         bind.call('run_light_left') { Tools::AddLight.toggle_selected!(:left) }
         bind.call('run_light_right') { Tools::AddLight.toggle_selected!(:right) }
         bind.call('run_table_keyboard') { Tools::AddTable.toggle_selected!('keyboard') }
+        bind.call('run_table_semi_circular') { Tools::AddTable.toggle_selected!('semi_circular') }
+        bind.call('run_table_square') { Tools::AddTable.toggle_selected!('square') }
       end
     end
   end

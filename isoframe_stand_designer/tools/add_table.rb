@@ -5,7 +5,7 @@ module ISOframe
       module AddTable
         module_function
 
-        # type_key is a Tables::REGISTRY key (currently 'keyboard'; more later).
+        # type_key is a Tables::REGISTRY key: keyboard / semi_circular / square.
         def toggle_selected!(type_key = 'keyboard')
           Tables.toggle_selected!(type_key)
         end

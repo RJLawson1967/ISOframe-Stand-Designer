@@ -20,8 +20,8 @@ module ISOframe
           end
           if defined?(Tables) && Tables.table_on?(@inst)
             UI.messagebox(
-              'This module has a table add-on. Remove the table first (Keyboard Table ' \
-              'again), then Flex. Tables are straight-only.'
+              'This module has a table add-on. Remove the table first (click the same ' \
+              'table button again), then Flex. Tables are straight-only.'
             )
             Sketchup.active_model.select_tool(nil)
             return
