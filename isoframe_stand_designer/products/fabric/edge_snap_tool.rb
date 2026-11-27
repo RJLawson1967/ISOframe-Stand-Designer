@@ -148,9 +148,8 @@ module ISOframe
             return unless @wall && @wall.valid?
             local = world_pt.transform(@wall.transformation.inverse)
             if @mode == :height
-              tip_guess = local.z / 1.mm
-              g_h = tip_guess - Fabric::Constants::GRAPHIC_Z_BOT_MM +
-                    Fabric::Constants::GRAPHIC_TOP_ABOVE_POST_MM
+              # Fabric top ≈ local Z (graphic covers Al from Z=0); snap to height keys.
+              g_h = local.z / 1.mm
               @preview_height = Fabric::Geometry.snap_height_key(g_h)
               Sketchup.vcb_label = 'Height'
               Sketchup.vcb_value = @preview_height
