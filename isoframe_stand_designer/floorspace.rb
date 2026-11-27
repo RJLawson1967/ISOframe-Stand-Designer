@@ -22,7 +22,8 @@ module ISOframe
       # World Z of the module origin / foot sole. On top of the floor when a
       # floorspace is defined; otherwise the ground plane (Z=0).
       def module_base_z(model = Sketchup.active_model)
-        defined?(model) ? FLOOR_THICKNESS_MM.mm : 0.0
+        # Call Floorspace.defined? — not Ruby's defined? keyword.
+        Floorspace.defined?(model) ? FLOOR_THICKNESS_MM.mm : 0.0
       end
 
       def require_defined!

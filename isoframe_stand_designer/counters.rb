@@ -11,6 +11,8 @@
 # v0.1.78: floor-slide lock — KEY_FLOOR_SLIDE on place; Constraints clamps feet
 # to floorspace top (XY free, no sink/lift). Not attached to Wave S/E.
 # v0.1.79: edges ON again (no soften on counter bake) — lights keep soft edges.
+# v0.1.80: Oval Counter soft+smooth+hide again (counter only). Tables/screens
+# stay hard-edged; lights stay soft.
 
 module ISOframe
   module StandDesigner
@@ -22,8 +24,8 @@ module ISOframe
           kind: 'oval',
           label: 'Oval Counter',
           skp_file: 'Oval_Counter.skp',
-          # Fresh name so dealers drop soft-edged v73–v78 bakes.
-          defn_name: 'ISOframe Counter Oval v79',
+          # Fresh name so dealers drop hard-edged v79 bake.
+          defn_name: 'ISOframe Counter Oval v80',
           instance_name: 'ISOframe Oval Counter'
         }
       }.freeze
@@ -91,6 +93,7 @@ module ISOframe
         defn_name = entry[:defn_name]
         existing = model.definitions[defn_name]
         if existing && !existing.image? && existing.entities.size > 0
+          Geometry.soften_definition_edges!(existing)
           return existing
         end
 
@@ -109,8 +112,10 @@ module ISOframe
         local = upright_sit_transform(src, kind)
         inst = defn.entities.add_instance(src, local)
         inst.name = entry[:instance_name] if inst.respond_to?(:name=)
+        Geometry.soften_definition_edges!(defn)
         puts "[ISOframe] Counter bake kind=#{kind} src=#{src.name.inspect} " \
-             "upright_x=#{OVAL_UPRIGHT_ROT_X_DEG}° entities=#{defn.entities.size}"
+             "upright_x=#{OVAL_UPRIGHT_ROT_X_DEG}° soft_edges=true " \
+             "entities=#{defn.entities.size}"
         defn
       end
 

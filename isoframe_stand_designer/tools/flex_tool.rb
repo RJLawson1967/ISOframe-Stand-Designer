@@ -313,6 +313,8 @@ module ISOframe
             Constraints.ensure_module_on_floor!(mod)
           end
           Constraints.ensure_module_on_floor!(@inst) if @inst && @inst.valid?
+          # v0.1.80: re-clamp every floor-sitter after flex transform pass.
+          Constraints.snap_all_floor_sitting!(Sketchup.active_model)
 
           # Keyboard table is a sibling instance — must track host S/E when flex
           # moves the stick chain (or the flexed module itself).
@@ -322,6 +324,8 @@ module ISOframe
             Screens.follow_hosts!(@chain) if defined?(Screens)
             Screens.follow_hosts!([@inst]) if defined?(Screens) && @inst && @inst.valid?
           end
+          # Tables/screens follow may nudge hosts — clamp S+E feet again.
+          Constraints.snap_all_modules!(Sketchup.active_model)
 
           assert_hinge_frozen!(angle)
         end
