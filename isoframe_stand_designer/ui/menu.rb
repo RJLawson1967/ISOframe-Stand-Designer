@@ -1,4 +1,8 @@
 # frozen_string_literal: true
+# Extensions → ISOframe Stand Designer.
+# v0.1.81: Panel / License / About at top level; Wave tools under Wave submenu.
+# Other product lines get empty “coming soon” submenus (firewall shells).
+
 module ISOframe
   module StandDesigner
     module AppMenu
@@ -7,40 +11,54 @@ module ISOframe
       def install!
         return if @installed
         menu = UI.menu('Extensions').add_submenu('ISOframe Stand Designer')
-        menu.add_item('New Job…') { Floorspace.prompt_and_draw! }
-        menu.add_item('Floorspace…') { Floorspace.prompt_and_draw! }
-        menu.add_separator
-        menu.add_item('Place Starter') do
-          Sketchup.active_model.select_tool(Tools::PlaceStarterTool.new)
-        end
-        menu.add_item('Place Extension') do
-          Sketchup.active_model.select_tool(Tools::PlaceExtensionTool.new)
-        end
-        menu.add_item('Flex…') do
-          Sketchup.active_model.select_tool(Tools::FlexTool.new)
-        end
-        menu.add_item('Height…') { Tools::HeightSwap.swap_selected! }
-        menu.add_item('Add Artwork…') { Artwork.prompt_and_add! }
-        menu.add_item('Add Light Left') { Tools::AddLight.toggle_selected!(:left) }
-        menu.add_item('Add Light Right') { Tools::AddLight.toggle_selected!(:right) }
-        menu.add_separator
-        menu.add_item('Keyboard Table') { Tools::AddTable.toggle_selected!('keyboard') }
-        menu.add_item('Semi-circular table attachment') { Tools::AddTable.toggle_selected!('semi_circular') }
-        menu.add_item('Square Table attachment') { Tools::AddTable.toggle_selected!('square') }
-        menu.add_item('Oval Counter') { Counters.place_selected!('oval') }
-        menu.add_item('Media Screen Small') { Tools::AddScreen.toggle_selected!('small') }
-        menu.add_item('Media Screen Large') { Tools::AddScreen.toggle_selected!('large') }
-        menu.add_separator
+
         menu.add_item('Panel…') { Dialog.show! }
         menu.add_item('License…') { License.prompt_and_set! }
         menu.add_item('About') do
           UI.messagebox(
             "#{EXTENSION_NAME} v#{EXTENSION_VERSION}\n" \
-            "Wave flexible MVP scaffold\n" \
+            "Wave · Fabric · Lumen · Ripple · ISObar · Express\n" \
             'ISOframe / Richard Lawson'
           )
         end
+        menu.add_separator
+
+        install_wave_submenu!(menu)
+        install_shell_submenu!(menu, 'fabric', Products::Fabric)
+        install_shell_submenu!(menu, 'lumen', Products::Lumen)
+        install_shell_submenu!(menu, 'ripple', Products::Ripple)
+        install_shell_submenu!(menu, 'isobar', Products::ISObar)
+        install_shell_submenu!(menu, 'express', Products::Express)
+
         @installed = true
+      end
+
+      def install_wave_submenu!(menu)
+        wave = menu.add_submenu(Products.label_for('wave'))
+        wave.add_item('New Job…') { Products::Wave.run_floorspace! }
+        wave.add_item('Floorspace…') { Products::Wave.run_floorspace! }
+        wave.add_separator
+        wave.add_item('Place Starter') { Products::Wave.run_starter! }
+        wave.add_item('Place Extension') { Products::Wave.run_extension! }
+        wave.add_item('Flex…') { Products::Wave.run_flex! }
+        wave.add_item('Height…') { Products::Wave.run_height! }
+        wave.add_item('Add Artwork…') { Products::Wave.run_artwork! }
+        wave.add_item('Add Light Left') { Products::Wave.run_light_left! }
+        wave.add_item('Add Light Right') { Products::Wave.run_light_right! }
+        wave.add_separator
+        wave.add_item('Keyboard Table') { Products::Wave.run_table_keyboard! }
+        wave.add_item('Semi-circular table attachment') { Products::Wave.run_table_semi_circular! }
+        wave.add_item('Square Table attachment') { Products::Wave.run_table_square! }
+        wave.add_item('Oval Counter') { Products::Wave.run_counter_oval! }
+        wave.add_item('Media Screen Small') { Products::Wave.run_screen_small! }
+        wave.add_item('Media Screen Large') { Products::Wave.run_screen_large! }
+      end
+
+      def install_shell_submenu!(menu, id, mod)
+        sub = menu.add_submenu(Products.label_for(id))
+        sub.add_item(mod.coming_soon_message) do
+          UI.messagebox(mod.coming_soon_message)
+        end
       end
     end
   end

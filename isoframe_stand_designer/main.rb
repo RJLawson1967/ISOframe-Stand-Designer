@@ -30,6 +30,13 @@ module ISOframe
         tools/add_light
         tools/add_table
         tools/add_screen
+        products
+        products/wave
+        products/fabric
+        products/lumen
+        products/ripple
+        products/isobar
+        products/express
         ui/dialog
         ui/menu
       ]

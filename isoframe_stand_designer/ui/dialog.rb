@@ -3,6 +3,9 @@
 # the dialog when closed, and wrap callbacks so Ruby errors surface. SketchUp
 # 2026 stopped invoking sketchup.* when callbacks were added after set_file on a
 # cached dialog — every panel button looked dead.
+#
+# v0.1.81: product tabs (Wave / Fabric / Lumen / Ripple / ISObar / Express).
+# Wave actions go through Products::Wave facade only.
 
 module ISOframe
   module StandDesigner
@@ -27,11 +30,11 @@ module ISOframe
       def build_dialog
         dlg = UI::HtmlDialog.new(
           dialog_title: 'ISOframe Stand Designer',
-          preferences_key: 'ISOframeStandDesignerDialog_v0145',
+          preferences_key: 'ISOframeStandDesignerDialog_v0181',
           scrollable: true,
           resizable: true,
-          width: 210,
-          height: 660,
+          width: 280,
+          height: 720,
           style: UI::HtmlDialog::STYLE_DIALOG
         )
 
@@ -55,26 +58,21 @@ module ISOframe
           end
         end
 
-        bind.call('run_floorspace') { Floorspace.prompt_and_draw! }
-        bind.call('run_starter') do
-          Sketchup.active_model.select_tool(Tools::PlaceStarterTool.new)
-        end
-        bind.call('run_extension') do
-          Sketchup.active_model.select_tool(Tools::PlaceExtensionTool.new)
-        end
-        bind.call('run_flex') do
-          Sketchup.active_model.select_tool(Tools::FlexTool.new)
-        end
-        bind.call('run_height') { Tools::HeightSwap.swap_selected! }
-        bind.call('run_artwork') { Artwork.prompt_and_add! }
-        bind.call('run_light_left') { Tools::AddLight.toggle_selected!(:left) }
-        bind.call('run_light_right') { Tools::AddLight.toggle_selected!(:right) }
-        bind.call('run_table_keyboard') { Tools::AddTable.toggle_selected!('keyboard') }
-        bind.call('run_table_semi_circular') { Tools::AddTable.toggle_selected!('semi_circular') }
-        bind.call('run_table_square') { Tools::AddTable.toggle_selected!('square') }
-        bind.call('run_counter_oval') { Counters.place_selected!('oval') }
-        bind.call('run_screen_small') { Tools::AddScreen.toggle_selected!('small') }
-        bind.call('run_screen_large') { Tools::AddScreen.toggle_selected!('large') }
+        # Wave tab — Products::Wave facade (firewall).
+        bind.call('run_floorspace') { Products::Wave.run_floorspace! }
+        bind.call('run_starter') { Products::Wave.run_starter! }
+        bind.call('run_extension') { Products::Wave.run_extension! }
+        bind.call('run_flex') { Products::Wave.run_flex! }
+        bind.call('run_height') { Products::Wave.run_height! }
+        bind.call('run_artwork') { Products::Wave.run_artwork! }
+        bind.call('run_light_left') { Products::Wave.run_light_left! }
+        bind.call('run_light_right') { Products::Wave.run_light_right! }
+        bind.call('run_table_keyboard') { Products::Wave.run_table_keyboard! }
+        bind.call('run_table_semi_circular') { Products::Wave.run_table_semi_circular! }
+        bind.call('run_table_square') { Products::Wave.run_table_square! }
+        bind.call('run_counter_oval') { Products::Wave.run_counter_oval! }
+        bind.call('run_screen_small') { Products::Wave.run_screen_small! }
+        bind.call('run_screen_large') { Products::Wave.run_screen_large! }
       end
     end
   end

@@ -7,19 +7,48 @@
     html, body { margin: 0; padding: 0; }
     body {
       font-family: system-ui, sans-serif;
-      margin: 10px 12px;
+      margin: 8px 10px 12px;
       color: #222;
       width: max-content;
+      min-width: 220px;
       max-width: 100%;
       box-sizing: border-box;
     }
-    h1 { font-size: 14px; margin: 0 0 10px; white-space: nowrap; }
-    button {
+    h1 { font-size: 14px; margin: 0 0 8px; white-space: nowrap; }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      margin: 0 0 10px;
+      border-bottom: 1px solid #ccc;
+      padding-bottom: 4px;
+    }
+    .tabs button {
+      display: inline-block;
+      width: auto;
+      margin: 0;
+      padding: 5px 8px;
+      font-size: 11px;
+      border: 1px solid #ccc;
+      border-radius: 4px 4px 0 0;
+      background: #f0f0f0;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tabs button:hover { background: #e8e8e8; }
+    .tabs button.active {
+      background: #fff;
+      border-bottom-color: #fff;
+      font-weight: 600;
+    }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .panel button.action {
       display: block; width: 100%; margin: 0 0 6px; padding: 8px 10px;
       font-size: 12px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px;
       background: #f7f7f7; white-space: nowrap; box-sizing: border-box;
     }
-    button:hover { background: #eee; }
+    .panel button.action:hover { background: #eee; }
     .row {
       display: flex;
       gap: 6px;
@@ -27,16 +56,23 @@
       width: 100%;
       box-sizing: border-box;
     }
-    .row button {
+    .row button.action {
       flex: 1 1 0;
       width: auto;
       margin: 0;
     }
-    .hint { font-size: 11px; color: #666; margin: 8px 0 0; line-height: 1.35; max-width: 22em; }
+    .hint { font-size: 11px; color: #666; margin: 8px 0 0; line-height: 1.35; max-width: 24em; }
+    .shell {
+      font-size: 12px;
+      color: #666;
+      padding: 18px 8px;
+      text-align: center;
+      border: 1px dashed #ccc;
+      border-radius: 4px;
+      background: #fafafa;
+    }
   </style>
   <script>
-    // Safe bridge for SketchUp HtmlDialog (SU 2026): prefer sketchup.* callbacks;
-    // fall back to sketchup: URL scheme if the object is not ready yet.
     function isoRun(name) {
       try {
         if (window.sketchup && typeof window.sketchup[name] === 'function') {
@@ -48,36 +84,78 @@
         window.location = 'sketchup:' + name;
       } catch (e2) {}
     }
+
+    function isoShowTab(id) {
+      var panels = document.querySelectorAll('.panel');
+      for (var i = 0; i < panels.length; i++) {
+        panels[i].classList.toggle('active', panels[i].id === 'panel-' + id);
+      }
+      var tabs = document.querySelectorAll('.tabs button');
+      for (var j = 0; j < tabs.length; j++) {
+        tabs[j].classList.toggle('active', tabs[j].getAttribute('data-tab') === id);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      isoShowTab('wave');
+    });
   </script>
 </head>
 <body>
   <h1>ISOframe Stand Designer</h1>
-  <button type="button" onclick="isoRun('run_floorspace')">New Job / Floorspace…</button>
-  <button type="button" onclick="isoRun('run_starter')">Place Starter</button>
-  <button type="button" onclick="isoRun('run_extension')">Place Extension</button>
-  <button type="button" onclick="isoRun('run_flex')">Flex…</button>
-  <button type="button" onclick="isoRun('run_height')">Height…</button>
-  <button type="button" onclick="isoRun('run_artwork')">Add Artwork…</button>
-  <div class="row">
-    <button type="button" onclick="isoRun('run_light_left')">Add Light Left</button>
-    <button type="button" onclick="isoRun('run_light_right')">Add Light Right</button>
+  <div class="tabs" role="tablist">
+    <button type="button" data-tab="wave" class="active" onclick="isoShowTab('wave')">Wave</button>
+    <button type="button" data-tab="fabric" onclick="isoShowTab('fabric')">Fabric</button>
+    <button type="button" data-tab="lumen" onclick="isoShowTab('lumen')">Lumen</button>
+    <button type="button" data-tab="ripple" onclick="isoShowTab('ripple')">Ripple</button>
+    <button type="button" data-tab="isobar" onclick="isoShowTab('isobar')">ISObar</button>
+    <button type="button" data-tab="express" onclick="isoShowTab('express')">Express</button>
   </div>
-  <button type="button" onclick="isoRun('run_table_keyboard')">Keyboard Table</button>
-  <button type="button" onclick="isoRun('run_table_semi_circular')">Semi-circular table attachment</button>
-  <button type="button" onclick="isoRun('run_table_square')">Square Table attachment</button>
-  <button type="button" onclick="isoRun('run_counter_oval')">Oval Counter</button>
-  <div class="row">
-    <button type="button" onclick="isoRun('run_screen_small')">Media Screen Small</button>
-    <button type="button" onclick="isoRun('run_screen_large')">Media Screen Large</button>
+
+  <div id="panel-wave" class="panel active" role="tabpanel">
+    <button type="button" class="action" onclick="isoRun('run_floorspace')">New Job / Floorspace…</button>
+    <button type="button" class="action" onclick="isoRun('run_starter')">Place Starter</button>
+    <button type="button" class="action" onclick="isoRun('run_extension')">Place Extension</button>
+    <button type="button" class="action" onclick="isoRun('run_flex')">Flex…</button>
+    <button type="button" class="action" onclick="isoRun('run_height')">Height…</button>
+    <button type="button" class="action" onclick="isoRun('run_artwork')">Add Artwork…</button>
+    <div class="row">
+      <button type="button" class="action" onclick="isoRun('run_light_left')">Add Light Left</button>
+      <button type="button" class="action" onclick="isoRun('run_light_right')">Add Light Right</button>
+    </div>
+    <button type="button" class="action" onclick="isoRun('run_table_keyboard')">Keyboard Table</button>
+    <button type="button" class="action" onclick="isoRun('run_table_semi_circular')">Semi-circular table attachment</button>
+    <button type="button" class="action" onclick="isoRun('run_table_square')">Square Table attachment</button>
+    <button type="button" class="action" onclick="isoRun('run_counter_oval')">Oval Counter</button>
+    <div class="row">
+      <button type="button" class="action" onclick="isoRun('run_screen_small')">Media Screen Small</button>
+      <button type="button" class="action" onclick="isoRun('run_screen_large')">Media Screen Large</button>
+    </div>
+    <p class="hint">
+      Floorspace first, then place a Wave starter. Place Extension grows to the
+      right. Add Artwork paints the blue-frame selection (wall, table, or Oval
+      Counter wrap). Add Light Left/Right toggles the SKP LED flood on that post
+      top. Table buttons attach Richard’s SKP desk to a straight bay. Oval Counter
+      is freestanding — click the floor to place; it slides on the floor (Z locked).
+      Media Screen Small/Large toggles Richard’s SKP on a straight bay (centre
+      1500 mm up, 50 mm in front of the graphic; Flex-link stays).
+    </p>
   </div>
-  <p class="hint">
-    Floorspace first, then place a Wave starter. Place Extension grows to the
-    right. Add Artwork paints the blue-frame selection (wall, table, or Oval
-    Counter wrap). Add Light Left/Right toggles the SKP LED flood on that post
-    top. Table buttons attach Richard’s SKP desk to a straight bay.     Oval Counter
-    is freestanding — click the floor to place; it slides on the floor (Z locked).
-    Media Screen Small/Large toggles Richard’s SKP on a straight bay (centre
-    1500 mm up, 50 mm in front of the graphic; Flex-link stays).
-  </p>
+
+  <div id="panel-fabric" class="panel" role="tabpanel">
+    <div class="shell">Fabric — coming soon</div>
+  </div>
+  <div id="panel-lumen" class="panel" role="tabpanel">
+    <div class="shell">Lumen — coming soon</div>
+  </div>
+  <div id="panel-ripple" class="panel" role="tabpanel">
+    <div class="shell">Ripple — coming soon</div>
+  </div>
+  <div id="panel-isobar" class="panel" role="tabpanel">
+    <div class="shell">ISObar — coming soon</div>
+  </div>
+  <div id="panel-express" class="panel" role="tabpanel">
+    <div class="shell">Express — coming soon</div>
+  </div>
 </body>
 </html>
