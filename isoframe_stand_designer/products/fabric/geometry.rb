@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Procedural Fabric wall (v0.1.82) — 37mm Al posts + fabric graphic. No flex.
-# Does not call Wave Geometry rebuild / flex path.
+# Procedural Fabric wall (v0.1.83) — 37mm Al frame fully covered by fabric.
+# All local Z ≥ 0 (instance origin = floorspace top). No Wave flex / Geometry.
 
 module ISOframe
   module StandDesigner
@@ -15,9 +15,10 @@ module ISOframe
             C::HEIGHTS_MM[height_key.to_s] || C::HEIGHTS_MM[C::DEFAULT_HEIGHT]
           end
 
+          # Post tip slightly below fabric top so fabric covers the Al tip.
           def post_tip_mm(height_key)
             g = height_mm(height_key)
-            C::GRAPHIC_Z_BOT_MM + g - C::GRAPHIC_TOP_ABOVE_POST_MM
+            g - C::GRAPHIC_TOP_ABOVE_POST_MM
           end
 
           def snap_width_mm(raw_mm)
@@ -95,77 +96,115 @@ module ISOframe
             tip = post_tip_mm(hkey)
             g_h = height_mm(hkey)
             z_bot = C::GRAPHIC_Z_BOT_MM.mm
-            z_top = (C::GRAPHIC_Z_BOT_MM + g_h).mm
+            z_top = g_h.mm
 
             xs = [0.0]
             segs.each { |s| xs << (xs.last + s) }
+
+            # Vertical Al posts — soles at local Z=0 (floorspace top).
             xs.each_with_index do |x_mm, i|
               add_post!(defn.entities, x_mm.mm, tip, "#{C::GROUP_POST}_#{i}")
             end
-            (0...(xs.size - 1)).each do |i|
-              add_graphic_panel!(
-                defn.entities,
-                xs[i].mm,
-                xs[i + 1].mm,
-                z_bot,
-                z_top,
-                "#{C::GROUP_GRAPHIC}_#{i}"
-              )
-            end
+            # Top horizontal rail so the Al is a closed frame under the fabric.
+            add_top_rail!(defn.entities, xs.first.mm, xs.last.mm, tip, C::GROUP_RAIL)
+
+            # One fabric sheet covering the full Al frame (posts + rail), Z≥0.
+            half = C::HALF_POST_MM.mm
+            add_graphic_panel!(
+              defn.entities,
+              xs.first.mm - half,
+              xs.last.mm + half,
+              z_bot,
+              z_top,
+              C::GROUP_GRAPHIC
+            )
             defn
           end
 
           def add_post!(ents, x, tip_mm, name)
             half = C::HALF_POST_MM.mm
             tip = tip_mm.mm
-            pts = [
+            # Explicit box — avoid face-extrude (can go below Z=0).
+            add_box!(
+              ents,
               Geom::Point3d.new(x - half, -half, 0),
-              Geom::Point3d.new(x + half, -half, 0),
-              Geom::Point3d.new(x + half, half, 0),
-              Geom::Point3d.new(x - half, half, 0)
-            ]
-            group = ents.add_group
-            group.name = name
-            face = group.entities.add_face(pts)
-            face.pushpull(tip) if face
-            color = Sketchup::Color.new(*C::POST_RGB)
-            group.entities.grep(Sketchup::Face).each do |f|
-              f.material = color
-              f.back_material = color
-            end
+              Geom::Point3d.new(x + half, half, tip),
+              Sketchup::Color.new(*C::POST_RGB),
+              name
+            )
+          end
+
+          def add_top_rail!(ents, x0, x1, tip_mm, name)
+            half = C::HALF_POST_MM.mm
+            tip = tip_mm.mm
+            rail_h = C::POST_MM.mm
+            z0 = tip - rail_h
+            z0 = 0 if z0 < 0
+            add_box!(
+              ents,
+              Geom::Point3d.new(x0 - half, -half, z0),
+              Geom::Point3d.new(x1 + half, half, tip),
+              Sketchup::Color.new(*C::POST_RGB),
+              name
+            )
           end
 
           def add_graphic_panel!(ents, x0, x1, z_bot, z_top, name)
-            # Front face at +Y (post front); thickness along +Y (room side).
+            return if x1 <= x0 || z_top <= z_bot
+            # Front of posts (+Y), thickness into the room (+Y).
             y0 = C::HALF_POST_MM.mm + C::GRAPHIC_FRONT_CLEARANCE_MM.mm
             y1 = y0 + C::GRAPHIC_THICKNESS_MM.mm
-            inset = C::HALF_POST_MM.mm
-            xa = x0 + inset
-            xb = x1 - inset
-            return if xb <= xa
-            # Bottom face then pushpull up for a solid slab.
-            pts = [
-              Geom::Point3d.new(xa, y0, z_bot),
-              Geom::Point3d.new(xb, y0, z_bot),
-              Geom::Point3d.new(xb, y1, z_bot),
-              Geom::Point3d.new(xa, y1, z_bot)
-            ]
-            group = ents.add_group
-            group.name = name
-            face = group.entities.add_face(pts)
-            return unless face
-            height = z_top - z_bot
-            face.pushpull(height) if height > 0
-            color = Sketchup::Color.new(*C::GRAPHIC_RGB)
-            group.entities.grep(Sketchup::Face).each do |f|
-              f.material = color
-              f.back_material = color
-            end
+            add_box!(
+              ents,
+              Geom::Point3d.new(x0, y0, z_bot),
+              Geom::Point3d.new(x1, y1, z_top),
+              Sketchup::Color.new(*C::GRAPHIC_RGB),
+              name
+            )
           rescue StandardError => e
             puts "[ISOframe][Fabric] add_graphic_panel! failed: #{e.message}"
           end
 
-          # World bounds helpers for edge-snap.
+          # Axis-aligned box with all faces; guarantees min Z is pmin.z (no extrude flip).
+          def add_box!(ents, pmin, pmax, color, name)
+            group = ents.add_group
+            group.name = name
+            x0, y0, z0 = pmin.x, pmin.y, pmin.z
+            x1, y1, z1 = pmax.x, pmax.y, pmax.z
+            # Clamp: never build below local Z=0 (floorspace top).
+            z0 = 0 if z0 < 0
+            z1 = 0 if z1 < 0
+            return group if z1 <= z0
+            bot = [
+              Geom::Point3d.new(x0, y0, z0),
+              Geom::Point3d.new(x1, y0, z0),
+              Geom::Point3d.new(x1, y1, z0),
+              Geom::Point3d.new(x0, y1, z0)
+            ]
+            top = [
+              Geom::Point3d.new(x0, y0, z1),
+              Geom::Point3d.new(x1, y0, z1),
+              Geom::Point3d.new(x1, y1, z1),
+              Geom::Point3d.new(x0, y1, z1)
+            ]
+            faces = []
+            faces << group.entities.add_face(bot[0], bot[1], bot[2], bot[3])
+            faces << group.entities.add_face(top[0], top[3], top[2], top[1])
+            4.times do |i|
+              j = (i + 1) % 4
+              faces << group.entities.add_face(bot[i], bot[j], top[j], top[i])
+            end
+            faces.compact.each do |f|
+              next unless f
+              f.material = color
+              f.back_material = color
+            end
+            group
+          rescue StandardError => e
+            puts "[ISOframe][Fabric] add_box! failed: #{e.message}"
+            group
+          end
+
           def wall_local_width_mm(inst)
             Attributes.get(inst, ::ISOframe::StandDesigner::Constants::KEY_FABRIC_WIDTH_MM, C::STARTER_WIDTH_MM).to_f
           end

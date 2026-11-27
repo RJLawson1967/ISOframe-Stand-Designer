@@ -1,5 +1,6 @@
 # frozen_string_literal: true
-# Fabric product sizes (v0.1.82). Isolated from Wave Constants::HEIGHTS_MM / bay.
+# Fabric product sizes (v0.1.83). Isolated from Wave Constants::HEIGHTS_MM / bay.
+# Fabric covers the entire Al frame; all geometry sits on/above floorspace top.
 
 module ISOframe
   module StandDesigner
@@ -8,10 +9,12 @@ module ISOframe
         module Constants
           POST_MM = 37.0
           HALF_POST_MM = POST_MM / 2.0
-          # Graphic fabric sheet thickness (mm) on the Al posts.
+          # Graphic fabric sheet thickness (mm) on the Al posts (front).
           GRAPHIC_THICKNESS_MM = 3.0
           GRAPHIC_FRONT_CLEARANCE_MM = 1.0
-          GRAPHIC_Z_BOT_MM = 80.0
+          # Fabric runs from floorspace top (local Z=0) so the whole Al frame is covered.
+          GRAPHIC_Z_BOT_MM = 0.0
+          # Fabric overhangs the post tip slightly (same idea as Wave).
           GRAPHIC_TOP_ABOVE_POST_MM = 5.0
 
           STARTER_WIDTH_MM = 900.0
@@ -29,10 +32,11 @@ module ISOframe
           # Snap order for top-edge drag (short → tall).
           HEIGHT_SNAP_ORDER = %w[midi maxi super_maxi ultra_maxi].freeze
 
-          DEFN_PREFIX = 'ISOframe Fabric Wall v82'
+          DEFN_PREFIX = 'ISOframe Fabric Wall v83'
           INSTANCE_NAME = 'ISOframe Fabric Wall'
           GROUP_POST = 'FabricPost'
           GROUP_GRAPHIC = 'FabricGraphic'
+          GROUP_RAIL = 'FabricRail'
 
           POST_RGB = [170, 176, 182].freeze
           GRAPHIC_RGB = [210, 220, 235].freeze

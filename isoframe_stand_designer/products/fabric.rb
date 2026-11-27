@@ -1,5 +1,6 @@
 # frozen_string_literal: true
-# Fabric product (v0.1.82) — place Midi starter + edge-snap height/width.
+# Fabric product (v0.1.83) — place Midi starter + edge-snap height/width.
+# Fabric covers entire Al frame; all geometry above floorspace top.
 # Firewall: no Wave flex / Geometry rebuild. Floorspace is shared UI only.
 
 module ISOframe

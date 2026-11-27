@@ -7,6 +7,7 @@
 # v0.1.81: product tabs (Wave / Fabric / Lumen / Ripple / ISObar / Express).
 # Wave actions go through Products::Wave facade only.
 # v0.1.82: Floorspace shared above tabs; Fabric place + edge-snap callbacks.
+# v0.1.83: Fabric graphic covers entire Al frame; all Z ≥ floorspace top.
 
 module ISOframe
   module StandDesigner
@@ -31,7 +32,7 @@ module ISOframe
       def build_dialog
         dlg = UI::HtmlDialog.new(
           dialog_title: 'ISOframe Stand Designer',
-          preferences_key: 'ISOframeStandDesignerDialog_v0182',
+          preferences_key: 'ISOframeStandDesignerDialog_v0183',
           scrollable: true,
           resizable: true,
           width: 300,
