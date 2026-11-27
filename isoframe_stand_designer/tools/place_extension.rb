@@ -113,7 +113,7 @@ module ISOframe
             )
             WallGraph.write_extension_graph!(inst, @anchor, side: side)
             Artwork.reapply_wall!(model, wall_id) if Artwork.wall_has_artwork?(model, wall_id)
-            Constraints.ensure_module_on_floor!(inst)
+            Constraints.ensure_module_on_floor!(inst) # floor-slide: feet on floorspace top
             Constraints.ensure_module_on_floor!(@anchor) if @anchor && @anchor.valid?
             model.selection.clear
             model.selection.add(inst)
@@ -125,7 +125,8 @@ module ISOframe
                          end
             Sketchup.status_text =
               "#{WallMath.status_line_for_wall(model, wall_id)} — " \
-              "Place snapped to #{format_open_pt(open_before)}; new open #{format_open_pt(open_after)}."
+              "Place snapped to #{format_open_pt(open_before)}; new open #{format_open_pt(open_after)}. " \
+              'Floor Z locked.'
             model.commit_operation
             if tip_after && tip_after[:module] && tip_after[:module].valid?
               @anchor = tip_after[:module]

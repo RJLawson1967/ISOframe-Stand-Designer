@@ -70,6 +70,7 @@
 # v0.1.72: table place locks kept (still no wrap on place). Artwork UI unified
 # under Add Artwork; freestanding Oval Counter is separate (see counters.rb).
 # v0.1.74: soft/smooth/hide edges on table bake (+ wrap SKP when apply instances).
+# v0.1.79: edges ON again — no soften on table/wrap bake (lights keep soft edges).
 
 module ISOframe
   module StandDesigner
@@ -82,8 +83,8 @@ module ISOframe
           label: 'Keyboard Table',
           straight_only: true,
           skp_file: 'Keyboard_with_Extension.skp',
-          # Fresh name so dealers drop any cached v43–v70 bake.
-          defn_name: 'ISOframe Table Keyboard SKP v71',
+          # Fresh name so dealers drop soft-edged v71–v78 bakes (v0.1.79 edges ON).
+          defn_name: 'ISOframe Table Keyboard SKP v79',
           instance_name: 'ISOframe Keyboard Table',
           graphic_group: 'TableGraphicHint'
         },
@@ -92,7 +93,7 @@ module ISOframe
           label: 'Semi-circular table attachment',
           straight_only: true,
           skp_file: 'Semi-circular_Table_Attachment.skp',
-          defn_name: 'ISOframe Table Semi-circular SKP v71',
+          defn_name: 'ISOframe Table Semi-circular SKP v79',
           instance_name: 'ISOframe Semi-circular Table',
           graphic_group: 'TableGraphicHint'
         },
@@ -101,7 +102,7 @@ module ISOframe
           label: 'Square Table attachment',
           straight_only: true,
           skp_file: 'Square_Table_Attachment.skp',
-          defn_name: 'ISOframe Table Square SKP v71',
+          defn_name: 'ISOframe Table Square SKP v79',
           instance_name: 'ISOframe Square Table',
           graphic_group: 'TableGraphicHint'
         }
@@ -519,7 +520,6 @@ module ISOframe
         defn_name = entry[:defn_name].to_s
         existing = model.definitions[defn_name]
         if existing && !existing.image? && existing.entities.size > 0
-          Geometry.soften_definition_edges!(existing)
           return existing
         end
 
@@ -577,7 +577,7 @@ module ISOframe
         # v0.1.71: do NOT load/instance Keyboard_table_graphic_wrap.skp on Place.
         # v0.1.70 broad match + root fallback spawned a distant orphan wrap.
         # Apply Table Artwork still calls ensure_graphic_wrap_target! on apply only.
-        Geometry.soften_definition_edges!(defn)
+        # v0.1.79: edges ON — no soften on table bake (lights keep soft edges).
         dump = dump_baked_entity_names(defn.entities, 0)
         puts "[ISOframe] Table bake entities: #{dump}"
         lip = find_keyboard_lip_entity(defn.entities, 0)
@@ -1106,7 +1106,6 @@ module ISOframe
         hit = find_graphic_wrap_with_transform(table_defn.entities, 0, identity_transform)
         if hit && hit[0]
           mark_as_table_graphic!(hit[0])
-          Geometry.soften_definition_edges!(table_defn)
           puts "[ISOframe] graphic wrap already in bake name=#{hit[0].name} def=#{def_name_of(hit[0])}"
           return hit
         end
@@ -1153,8 +1152,6 @@ module ISOframe
         rescue StandardError
           nil
         end
-        Geometry.soften_definition_edges!(gdef)
-        Geometry.soften_definition_edges!(table_defn)
         puts "[ISOframe] INSTANCED wrap from #{path} def=#{gdef.name.inspect} " \
              "origin=#{local.origin}"
         [inst, local]

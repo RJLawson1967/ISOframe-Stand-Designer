@@ -77,11 +77,12 @@ module ISOframe
               flex_angle: 0.0
             )
             WallGraph.write_starter_graph!(inst)
-            Constraints.ensure_module_on_floor!(inst)
+            Constraints.ensure_module_on_floor!(inst) # floor-slide: feet on floorspace top
             model.selection.clear
             model.selection.add(inst)
             Sketchup.status_text =
-              "Placed Starter — wall #{wall_id}. #{WallMath.status_line_for_wall(model, wall_id)}"
+              "Placed Starter — wall #{wall_id}. Slides on floor (Z locked). " \
+              "#{WallMath.status_line_for_wall(model, wall_id)}"
             model.commit_operation
           rescue StandardError => e
             model.abort_operation

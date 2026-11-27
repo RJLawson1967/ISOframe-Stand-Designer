@@ -21,10 +21,13 @@ module ISOframe
 
       # Load (or reuse) a definition named `defn_name` from a bundled OBJ.
       # OBJ vertices are millimetres; converted with .mm for SketchUp inches.
-      def definition_from_obj!(model, defn_name, filename, color: nil)
+      # v0.1.79: soften only when caller asks (lights / flood OBJ). Foot stays hard-edged.
+      def definition_from_obj!(model, defn_name, filename, color: nil, soften: false)
         existing = model.definitions[defn_name]
         if existing && !existing.image? && existing.entities.size > 0
-          Geometry.soften_definition_edges!(existing) if defined?(Geometry)
+          if soften && defined?(Geometry)
+            Geometry.soften_definition_edges!(existing)
+          end
           return existing
         end
 
@@ -34,7 +37,9 @@ module ISOframe
         defn = existing || model.definitions.add(defn_name)
         defn.entities.clear! if defn.entities.size > 0
         build_obj_into!(defn.entities, path, color: color)
-        Geometry.soften_definition_edges!(defn) if defined?(Geometry)
+        if soften && defined?(Geometry)
+          Geometry.soften_definition_edges!(defn)
+        end
         defn
       end
 

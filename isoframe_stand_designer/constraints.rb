@@ -1,13 +1,16 @@
 # frozen_string_literal: true
-# Keep Wave modules on the floor plane: world origin Z = Floorspace.module_base_z
-# (floor top when floorspace exists, else Z=0).
+# Keep floor-sitting ISOframe items on the floorspace top plane.
 #
-# v0.1.44: Z-ONLY. Never touch XY or rotation. Observers must not start nested
-# operations during Move (that cancelled moves and snapped modules back in XY).
+# v0.1.44: Wave Z-ONLY via origin. Never touch XY or rotation. Observers must
+# not start nested operations during Move (that cancelled moves / XY snap-back).
 #
-# v0.1.78: freestanding floor accessories (Oval Counter + any KEY_FLOOR_SLIDE
-# instance) also Z-locked — world bounds min Z = floorspace top. XY slide and
-# Z-axis rotation allowed. Does NOT apply to Wave S/E, tables, or media screens.
+# v0.1.78: freestanding floor accessories (Oval Counter + KEY_FLOOR_SLIDE) also
+# Z-locked via world bounds min Z.
+#
+# v0.1.79: ALL floor-sitting items share one clamp — Wave starter/extension +
+# freestanding accessories. Feet (world AABB min Z) → Floorspace.module_base_z.
+# XY slide + Z rotation OK. Tables and media screens (wall-plane siblings) are
+# excluded; host-follow / flex still call ensure_module_on_floor! for S+E.
 
 module ISOframe
   module StandDesigner
@@ -36,8 +39,7 @@ module ISOframe
         # Note: no ModelObserver onTransactionCommit — that re-ran snaps after
         # every edit and, with nested ops, fought the Move tool (XY snap-back).
         Floorspace.ensure_locked!(model)
-        snap_all_modules!(model)
-        snap_all_freestanding!(model)
+        snap_all_floor_sitting!(model)
         Tables.install_erase_observer!(model) if defined?(Tables)
         Screens.install_erase_observer!(model) if defined?(Screens)
       rescue StandardError => e
@@ -78,6 +80,14 @@ module ISOframe
         Attributes.get(entity, Constants::KEY_TYPE).to_s == Constants::TYPE_COUNTER
       end
 
+      # Anything whose feet must stay on the floorspace top.
+      def floor_sitting?(entity)
+        return false unless entity && entity.valid?
+        return false if defined?(Tables) && Tables.table_instance?(entity)
+        return false if defined?(Screens) && Screens.screen_instance?(entity)
+        isoframe_module?(entity) || freestanding_floor?(entity)
+      end
+
       def mark_floor_slide!(entity)
         return unless entity && entity.valid?
         Attributes.set(entity, Constants::KEY_FLOOR_SLIDE, '1')
@@ -103,11 +113,21 @@ module ISOframe
         entity.transformation.origin.z
       end
 
-      # Pure Z translation in the entity's parent space. Preserves XY + rotation.
-      def snap_z_to_floor!(entity)
-        return false unless isoframe_module?(entity)
+      # World Z of the lowest point (feet). Falls back to origin Z.
+      def world_feet_z(entity)
+        return world_origin_z(entity) unless entity && entity.valid?
+        bb = entity.bounds
+        return world_origin_z(entity) if bb.nil? || bb.empty?
+        bb.min.z
+      rescue StandardError
+        world_origin_z(entity)
+      end
+
+      # Pure Z translation. Preserves XY + rotation. Feet → floorspace top.
+      def snap_floor_sitting_to_floor!(entity)
+        return false unless floor_sitting?(entity)
         target = Floorspace.module_base_z(entity.model)
-        z = world_origin_z(entity)
+        z = world_feet_z(entity)
         dz = target - z
         return false if dz.abs <= Z_TOL
         entity.transform!(Geom::Transformation.translation(Geom::Vector3d.new(0, 0, dz)))
@@ -116,19 +136,16 @@ module ISOframe
         false
       end
 
-      # Clamp freestanding feet (world AABB min Z) to floorspace top.
-      # Pure Z translation — XY slide and Z rotation preserved.
+      # Wave API (flex / place / height) — same feet clamp.
+      def snap_z_to_floor!(entity)
+        return false unless isoframe_module?(entity)
+        snap_floor_sitting_to_floor!(entity)
+      end
+
+      # Freestanding API — same feet clamp.
       def snap_freestanding_to_floor!(entity)
         return false unless freestanding_floor?(entity)
-        target = Floorspace.module_base_z(entity.model)
-        bb = entity.bounds
-        return false if bb.nil? || bb.empty?
-        dz = target - bb.min.z
-        return false if dz.abs <= Z_TOL
-        entity.transform!(Geom::Transformation.translation(Geom::Vector3d.new(0, 0, dz)))
-        true
-      rescue StandardError
-        false
+        snap_floor_sitting_to_floor!(entity)
       end
 
       def snap_all_modules!(model)
@@ -142,6 +159,11 @@ module ISOframe
           next unless freestanding_floor?(ent)
           snap_freestanding_to_floor!(ent)
         end
+      end
+
+      def snap_all_floor_sitting!(model)
+        snap_all_modules!(model)
+        snap_all_freestanding!(model)
       end
 
       def each_wave_module(model, &block)
@@ -166,6 +188,7 @@ module ISOframe
       end
 
       def ensure_module_on_floor!(entity)
+        mark_floor_slide!(entity) if isoframe_module?(entity)
         snap_z_to_floor!(entity)
       end
 
@@ -204,22 +227,14 @@ module ISOframe
         def correct_z_only(entity)
           return if Constraints.correcting?
           return unless entity && entity.valid?
+          return unless Constraints.floor_sitting?(entity)
 
-          if Constraints.isoframe_module?(entity)
-            target = Floorspace.module_base_z(entity.model)
-            z = Constraints.world_origin_z(entity)
-            return if (z - target).abs <= Constraints::Z_TOL
-            Constraints.with_correcting do
-              Constraints.snap_z_to_floor!(entity)
-            end
-          elsif Constraints.freestanding_floor?(entity)
-            target = Floorspace.module_base_z(entity.model)
-            bb = entity.bounds
-            return if bb.nil? || bb.empty?
-            return if (bb.min.z - target).abs <= Constraints::Z_TOL
-            Constraints.with_correcting do
-              Constraints.snap_freestanding_to_floor!(entity)
-            end
+          target = Floorspace.module_base_z(entity.model)
+          z = Constraints.world_feet_z(entity)
+          return if (z - target).abs <= Constraints::Z_TOL
+
+          Constraints.with_correcting do
+            Constraints.snap_floor_sitting_to_floor!(entity)
           end
         rescue StandardError
           nil
