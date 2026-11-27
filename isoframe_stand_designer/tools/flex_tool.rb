@@ -26,6 +26,14 @@ module ISOframe
             Sketchup.active_model.select_tool(nil)
             return
           end
+          if defined?(Screens) && Screens.screen_on?(@inst)
+            UI.messagebox(
+              'This module has a media screen. Remove the screen first (click the same ' \
+              'Media Screen button again), then Flex. Screens are straight-only.'
+            )
+            Sketchup.active_model.select_tool(nil)
+            return
+          end
           @hinge_side = Constants::HINGE_LEFT
           @base_angle = Attributes.get(@inst, Constants::KEY_FLEX, 0.0).to_f
           @drag_angle = @base_angle
@@ -311,6 +319,8 @@ module ISOframe
           if defined?(Tables)
             Tables.follow_hosts!(@chain)
             Tables.follow_hosts!([@inst]) if @inst && @inst.valid?
+            Screens.follow_hosts!(@chain) if defined?(Screens)
+            Screens.follow_hosts!([@inst]) if defined?(Screens) && @inst && @inst.valid?
           end
 
           assert_hinge_frozen!(angle)

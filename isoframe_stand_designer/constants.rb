@@ -64,6 +64,10 @@ module ISOframe
       # Freestanding counter (Oval first) — not attached to Wave S/E.
       KEY_COUNTER_KIND = 'counter_kind'
       KEY_COUNTER_ARTWORK_PATH = 'counter_artwork_image_path'
+      # Media screen Small/Large on straight S/E (flexilink stays).
+      KEY_SCREEN_TYPE = 'screen_type'
+      KEY_SCREEN_KIND = 'screen_kind'
+      KEY_SCREEN_HOST = 'screen_host_module_id'
       # Local-left post is always the definition hinge; Fix Right reparameterizes
       # the instance transform so the local-right post is fixed in world.
       HINGE_LEFT = 'left'

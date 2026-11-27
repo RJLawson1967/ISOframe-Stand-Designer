@@ -1,0 +1,459 @@
+# frozen_string_literal: true
+# Media Screen Small / Large — Richard’s SKPs on a straight Wave starter or
+# extension. Sibling instance (like tables). Flexilink STAYS. Straight only.
+#
+# v0.1.75 locks:
+#   - Centre of screen 1500 mm above floor (module Z = floor top)
+#   - Screen 50 mm in front of graphic outer face
+#   - Centred on the bay (midpoint of hinge/free posts)
+#   - Soft edges via Geometry.soften_definition_edges!
+
+module ISOframe
+  module StandDesigner
+    module Screens
+      module_function
+
+      REGISTRY = {
+        'small' => {
+          kind: 'small',
+          label: 'Media Screen Small',
+          skp_file: 'Media_screen_-_small.skp',
+          defn_name: 'ISOframe Media Screen Small v75',
+          instance_name: 'ISOframe Media Screen Small'
+        },
+        'large' => {
+          kind: 'large',
+          label: 'Media Screen Large',
+          skp_file: 'Media_screen_-_Large.skp',
+          defn_name: 'ISOframe Media Screen Large v75',
+          instance_name: 'ISOframe Media Screen Large'
+        }
+      }.freeze
+
+      # LOCKED v0.1.75 — do not change unless Richard asks.
+      SCREEN_CENTER_Z_MM = 1500.0
+      SCREEN_IN_FRONT_OF_GRAPHIC_MM = 50.0
+
+      SKIP_NAME_RE = /
+        \bsree\b|
+        floorspace|
+        isoframe\s*wave|
+        wave\s*(starter|extension)|
+        flexibeam|
+        flood\s*light|
+        led\s*flood|
+        \bprice\b
+      /ix
+
+      SCREEN_NAME_RE = /
+        samsung|
+        smart\s*tv|
+        wide\s*screen|
+        very\s*slim\s*tv|
+        media\s*screen|
+        \btv\b
+      /ix
+
+      def label_for(kind)
+        entry = REGISTRY[kind.to_s]
+        entry ? entry[:label] : kind.to_s
+      end
+
+      def screen_on?(inst)
+        !screen_type(inst).empty?
+      end
+
+      def screen_type(inst)
+        Attributes.get(inst, Constants::KEY_SCREEN_TYPE, '').to_s
+      end
+
+      def screen_instance?(ent)
+        return false unless ent && ent.valid? && ent.is_a?(Sketchup::ComponentInstance)
+        kind = Attributes.get(ent, Constants::KEY_SCREEN_KIND, '').to_s
+        !kind.empty?
+      end
+
+      def straight?(inst)
+        Attributes.get(inst, Constants::KEY_FLEX, 0.0).to_f.abs < 0.5
+      end
+
+      def toggle_selected!(kind = 'small')
+        return unless License.require_active!
+        model = Sketchup.active_model
+        insts = SelectionUtil.wave_modules_in_selection(model)
+        if insts.empty?
+          model.selection.each do |e|
+            next unless screen_instance?(e)
+            host = host_for_screen(e)
+            insts << host if host
+          end
+          insts.uniq!
+        end
+        if insts.empty?
+          UI.messagebox(
+            "Select a straight Wave starter or extension, then #{label_for(kind)}."
+          )
+          return false
+        end
+
+        model.start_operation("ISOframe #{label_for(kind)}", true)
+        begin
+          attached = 0
+          removed = 0
+          skipped = 0
+          insts.each do |inst|
+            case toggle_one!(inst, kind)
+            when :attached then attached += 1
+            when :removed then removed += 1
+            else skipped += 1
+            end
+          end
+          model.commit_operation
+
+          if attached + removed == 0 && skipped > 0
+            UI.messagebox('Media screens only attach to straight modules (flex = 0°). Straighten first.')
+            return false
+          end
+          bits = []
+          bits << "+#{attached}" if attached > 0
+          bits << "−#{removed}" if removed > 0
+          bits << "skipped #{skipped} bent" if skipped > 0
+          Sketchup.status_text = "#{label_for(kind)}: #{bits.join(' / ')}"
+          true
+        rescue StandardError => e
+          model.abort_operation
+          UI.messagebox("Media Screen failed:\n#{e.message}")
+          false
+        end
+      end
+
+      def toggle_one!(inst, kind)
+        kind = kind.to_s
+        return false unless REGISTRY.key?(kind)
+        return false unless SelectionUtil.wave_module?(inst)
+
+        current = screen_type(inst)
+        if current == kind
+          remove!(inst)
+          return :removed
+        end
+        return :bent unless straight?(inst)
+
+        attach!(inst, kind)
+        :attached
+      end
+
+      def attach!(inst, kind)
+        kind = kind.to_s
+        entry = REGISTRY[kind]
+        raise ArgumentError, "Unknown screen: #{kind}" unless entry
+        raise 'Media screens only attach to straight modules' unless straight?(inst)
+
+        erase_screen_instances_for_host!(inst)
+        Attributes.set(inst, Constants::KEY_SCREEN_TYPE, kind)
+        # Do NOT erase flexilink. Do NOT rebuild host definition.
+        place_screen_instance!(inst, entry)
+        Constraints.ensure_module_on_floor!(inst)
+        inst
+      end
+
+      def remove!(inst)
+        return unless inst && inst.valid?
+        erase_screen_instances_for_host!(inst)
+        Attributes.set(inst, Constants::KEY_SCREEN_TYPE, '')
+        Constraints.ensure_module_on_floor!(inst)
+        inst
+      end
+
+      def place_screen_instance!(host, entry)
+        model = host.model
+        mid = Attributes.get(host, Constants::KEY_MODULE_ID).to_s
+        if mid.empty?
+          mid = "mod_#{host.entityID}_#{Time.now.to_i}"
+          Attributes.set(host, Constants::KEY_MODULE_ID, mid)
+        end
+
+        defn = screen_definition!(model, entry)
+        local = attach_local_transform
+        world_tr = host.transformation * local
+        inst = model.active_entities.add_instance(defn, world_tr)
+        inst.name = entry[:instance_name]
+        Attributes.set(inst, Constants::KEY_SCREEN_KIND, entry[:kind].to_s)
+        Attributes.set(inst, Constants::KEY_SCREEN_HOST, mid.to_s)
+        puts "[ISOframe] Media screen placed kind=#{entry[:kind]} " \
+             "local_mm=#{(local.origin.x / 1.mm).round(1)}," \
+             "#{(local.origin.y / 1.mm).round(1)}," \
+             "#{(local.origin.z / 1.mm).round(1)}"
+        inst
+      end
+
+      def reposition_screen_for_host!(host)
+        return unless host && host.valid?
+        return unless screen_on?(host)
+        screen = find_screen_instance_for_host(host)
+        return unless screen && screen.valid?
+        screen.transformation = host.transformation * attach_local_transform
+        screen
+      rescue StandardError => e
+        puts "[ISOframe] reposition_screen_for_host! failed: #{e.message}"
+        nil
+      end
+
+      def follow_hosts!(hosts)
+        Array(hosts).each do |host|
+          next unless host && host.valid?
+          next unless SelectionUtil.wave_module?(host)
+          next unless screen_on?(host)
+          reposition_screen_for_host!(host)
+        end
+        nil
+      rescue StandardError => e
+        puts "[ISOframe] Screens.follow_hosts! failed: #{e.message}"
+        nil
+      end
+
+      # Graphic outer face Y + 50 mm; bay midpoint X; centre Z = 1500 mm.
+      def attach_local_transform
+        hinge = Geometry.hinge_center_local
+        free = Geometry.end_post_center_local(0.0)
+        cx = (hinge.x + free.x) * 0.5
+        graphic_front_y =
+          Constants::HALF_POST_MM.mm +
+          Geometry::GRAPHIC_FRONT_CLEARANCE_MM.mm +
+          Geometry::GRAPHIC_THICKNESS_MM.mm
+        cy = graphic_front_y + SCREEN_IN_FRONT_OF_GRAPHIC_MM.mm
+        cz = SCREEN_CENTER_Z_MM.mm
+        Geom::Transformation.new(Geom::Point3d.new(cx, cy, cz))
+      end
+
+      def screen_definition!(model, entry)
+        defn_name = entry[:defn_name]
+        existing = model.definitions[defn_name]
+        if existing && !existing.image? && existing.entities.size > 0
+          Geometry.soften_definition_edges!(existing)
+          return existing
+        end
+
+        path = MeshImport.model_path(entry[:skp_file])
+        raise "Missing bundled SKP: #{File.basename(path)}" unless File.file?(path)
+
+        root = model.definitions.load(path)
+        raise "Failed to load #{File.basename(path)}" unless root
+
+        src = pick_screen_source(model, root)
+        raise "No media screen geometry in #{File.basename(path)}" unless src
+
+        defn = existing || model.definitions.add(defn_name)
+        defn.entities.clear! if defn.entities.size > 0
+
+        local = orient_screen_to_bake(src)
+        inst = defn.entities.add_instance(src, local)
+        inst.name = entry[:instance_name] if inst.respond_to?(:name=)
+        Geometry.soften_definition_edges!(defn)
+        puts "[ISOframe] Media screen bake kind=#{entry[:kind]} src=#{src.name.inspect}"
+        defn
+      end
+
+      def pick_screen_source(model, root)
+        scored = []
+        model.definitions.each do |d|
+          next unless d && d.valid?
+          next if d.respond_to?(:image?) && d.image?
+          n = d.name.to_s
+          next if n =~ SKIP_NAME_RE
+          faces = 0
+          begin
+            faces = count_faces_deep(d.entities, 0)
+          rescue StandardError
+            faces = 0
+          end
+          next if faces < 4
+          score = 0.0
+          score += 80.0 if n =~ SCREEN_NAME_RE
+          score += 40.0 if n =~ /samsung|slim\s*tv|wide\s*screen/i
+          score += [faces, 4000].min * 0.01
+          begin
+            bb = d.bounds
+            unless bb.nil? || bb.empty?
+              dx = (bb.max.x - bb.min.x).abs / 1.mm
+              dy = (bb.max.y - bb.min.y).abs / 1.mm
+              dz = (bb.max.z - bb.min.z).abs / 1.mm
+              dims = [dx, dy, dz].sort
+              # Flat panel-ish: one thin axis, two larger.
+              score += 30.0 if dims[0] < 200.0 && dims[1] >= 200.0
+              score -= 40.0 if dx > 4000.0 || dy > 4000.0
+            end
+          rescue StandardError
+            nil
+          end
+          scored << [score, d]
+        end
+        scored.sort_by! { |s, _| -s }
+        return root if scored.empty? && root && root.valid?
+        return nil if scored.empty?
+        puts "[ISOframe] Media screen source=#{scored.first[1].name.inspect} score=#{scored.first[0].round(1)}"
+        scored.first[1]
+      end
+
+      def count_faces_deep(entities, depth)
+        return 0 if entities.nil? || depth > 8
+        n = entities.grep(Sketchup::Face).size
+        entities.each do |e|
+          if e.is_a?(Sketchup::Group)
+            n += count_faces_deep(e.entities, depth + 1)
+          elsif e.is_a?(Sketchup::ComponentInstance)
+            n += count_faces_deep(e.definition.entities, depth + 1)
+          end
+        end
+        n
+      end
+
+      # Bake so screen is vertical (Z up), thin axis ≈ Y (faces room/+Y), centre at origin.
+      def orient_screen_to_bake(src)
+        bb = src.bounds
+        return Geom::Transformation.new if bb.nil? || bb.empty?
+
+        dx = (bb.max.x - bb.min.x).abs
+        dy = (bb.max.y - bb.min.y).abs
+        dz = (bb.max.z - bb.min.z).abs
+        origin = Geom::Point3d.new(0, 0, 0)
+        rot = Geom::Transformation.new
+
+        # Y-up / lying flat: tallest along Y or thinnest along Z → +90° about X.
+        if dy >= dx && dy >= dz
+          rot = Geom::Transformation.rotation(
+            origin, Geom::Vector3d.new(1, 0, 0), 90.0 * Math::PI / 180.0
+          )
+        elsif dz <= dx && dz <= dy
+          rot = Geom::Transformation.rotation(
+            origin, Geom::Vector3d.new(1, 0, 0), 90.0 * Math::PI / 180.0
+          )
+        end
+
+        # After upright, ensure thin axis is Y (screen faces ±Y). If thin is X, +90° Z.
+        corners = bound_corners(bb).map { |p| p.transform(rot) }
+        dx2 = corners.map(&:x).minmax.then { |a, b| (b - a).abs }
+        dy2 = corners.map(&:y).minmax.then { |a, b| (b - a).abs }
+        dz2 = corners.map(&:z).minmax.then { |a, b| (b - a).abs }
+        if dx2 <= dy2 && dx2 <= dz2
+          rot = Geom::Transformation.rotation(
+            origin, Geom::Vector3d.new(0, 0, 1), 90.0 * Math::PI / 180.0
+          ) * rot
+        end
+
+        center_at_origin_after(src, rot)
+      end
+
+      def bound_corners(bb)
+        [
+          Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z),
+          Geom::Point3d.new(bb.min.x, bb.min.y, bb.max.z),
+          Geom::Point3d.new(bb.min.x, bb.max.y, bb.min.z),
+          Geom::Point3d.new(bb.min.x, bb.max.y, bb.max.z),
+          Geom::Point3d.new(bb.max.x, bb.min.y, bb.min.z),
+          Geom::Point3d.new(bb.max.x, bb.min.y, bb.max.z),
+          Geom::Point3d.new(bb.max.x, bb.max.y, bb.min.z),
+          Geom::Point3d.new(bb.max.x, bb.max.y, bb.max.z)
+        ]
+      end
+
+      def center_at_origin_after(src, rot)
+        bb = src.bounds
+        return rot if bb.nil? || bb.empty?
+        pts = bound_corners(bb).map { |p| p.transform(rot) }
+        cx = pts.map(&:x).minmax.sum * 0.5
+        cy = pts.map(&:y).minmax.sum * 0.5
+        cz = pts.map(&:z).minmax.sum * 0.5
+        sit = Geom::Transformation.translation(Geom::Vector3d.new(-cx, -cy, -cz))
+        sit * rot
+      end
+
+      def find_screen_instance_for_host(host)
+        mid = Attributes.get(host, Constants::KEY_MODULE_ID).to_s
+        return nil if mid.empty?
+        host.model.active_entities.grep(Sketchup::ComponentInstance).find do |e|
+          next false unless screen_instance?(e)
+          Attributes.get(e, Constants::KEY_SCREEN_HOST).to_s == mid
+        end
+      end
+
+      def erase_screen_instances_for_host!(host)
+        mid = Attributes.get(host, Constants::KEY_MODULE_ID).to_s
+        host.model.active_entities.grep(Sketchup::ComponentInstance).each do |e|
+          next unless screen_instance?(e)
+          next unless mid.empty? || Attributes.get(e, Constants::KEY_SCREEN_HOST).to_s == mid
+          e.erase! if e.valid?
+        end
+      rescue StandardError
+        nil
+      end
+
+      def host_for_screen(screen_inst)
+        mid = Attributes.get(screen_inst, Constants::KEY_SCREEN_HOST).to_s
+        return nil if mid.empty?
+        screen_inst.model.active_entities.grep(Sketchup::ComponentInstance).find do |e|
+          next false unless SelectionUtil.wave_module?(e)
+          Attributes.get(e, Constants::KEY_MODULE_ID).to_s == mid
+        end
+      end
+
+      def handle_screen_erased!(model, host_module_id)
+        return if host_module_id.to_s.empty?
+        host = model.active_entities.grep(Sketchup::ComponentInstance).find do |e|
+          next false unless SelectionUtil.wave_module?(e)
+          Attributes.get(e, Constants::KEY_MODULE_ID).to_s == host_module_id.to_s
+        end
+        return unless host && host.valid?
+        return if screen_type(host).empty?
+        Attributes.set(host, Constants::KEY_SCREEN_TYPE, '')
+      rescue StandardError => e
+        puts "[ISOframe] handle_screen_erased! failed: #{e.message}"
+      end
+
+      def install_erase_observer!(model)
+        return unless model
+        @erase_observers ||= {}
+        return if @erase_observers[model.object_id]
+        obs = ScreenEraseObserver.new
+        model.entities.add_observer(obs)
+        @erase_observers[model.object_id] = obs
+      end
+
+      class ScreenEraseObserver < Sketchup::EntitiesObserver
+        def initialize
+          @host_by_eid = {}
+        end
+
+        def onElementAdded(_entities, entity)
+          return unless Screens.screen_instance?(entity)
+          mid = Attributes.get(entity, Constants::KEY_SCREEN_HOST).to_s
+          @host_by_eid[entity.entityID] = mid unless mid.empty?
+        end
+
+        def onElementModified(_entities, entity)
+          return unless entity && entity.valid?
+          if SelectionUtil.wave_module?(entity) && Screens.screen_on?(entity)
+            Screens.reposition_screen_for_host!(entity)
+          end
+        rescue StandardError
+          nil
+        end
+
+        def onElementRemoved(_entities, entity_id)
+          mid = @host_by_eid.delete(entity_id)
+          return if mid.nil? || mid.empty?
+          model = Sketchup.active_model
+          return unless model
+          still = model.active_entities.grep(Sketchup::ComponentInstance).any? do |e|
+            Screens.screen_instance?(e) &&
+              Attributes.get(e, Constants::KEY_SCREEN_HOST).to_s == mid
+          end
+          return if still
+          Screens.handle_screen_erased!(model, mid)
+        rescue StandardError
+          nil
+        end
+      end
+    end
+  end
+end
