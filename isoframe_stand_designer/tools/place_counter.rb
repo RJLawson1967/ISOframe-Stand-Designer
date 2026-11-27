@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 # Click-to-place freestanding counter on the floorspace (Z = floor top).
-# Not attached to Wave modules — user can Move freely after place.
+# Not attached to Wave modules. v0.1.78: Move is floor-slide only (Z locked;
+# feet stay on floorspace top — see Constraints.snap_freestanding_to_floor!).
 
 module ISOframe
   module StandDesigner
@@ -75,10 +76,12 @@ module ISOframe
             inst.name = @entry[:instance_name]
             Attributes.set(inst, Constants::KEY_TYPE, Constants::TYPE_COUNTER)
             Attributes.set(inst, Constants::KEY_COUNTER_KIND, @kind)
+            Constraints.ensure_freestanding_on_floor!(inst)
             model.selection.clear
             model.selection.add(inst)
             Sketchup.status_text =
-              "Placed #{@entry[:label]} — move freely; select it and Add Artwork to wrap."
+              "Placed #{@entry[:label]} — slides on the floor (Z locked); " \
+              'select it and Add Artwork to wrap.'
             model.commit_operation
           rescue StandardError => e
             model.abort_operation

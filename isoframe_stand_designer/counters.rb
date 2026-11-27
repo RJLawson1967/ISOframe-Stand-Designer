@@ -8,6 +8,8 @@
 # v0.1.73: STL/CAD import lies on its side in SketchUp (Y-up). LOCK upright bake:
 # +90° about +X so feet sit on the floor (min Z); then translate so min Z = 0.
 # v0.1.74: soft/smooth/hide all edges on bake (and cached defs) — clean import look.
+# v0.1.78: floor-slide lock — KEY_FLOOR_SLIDE on place; Constraints clamps feet
+# to floorspace top (XY free, no sink/lift). Not attached to Wave S/E.
 
 module ISOframe
   module StandDesigner

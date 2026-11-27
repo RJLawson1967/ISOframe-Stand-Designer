@@ -64,6 +64,9 @@ module ISOframe
       # Freestanding counter (Oval first) — not attached to Wave S/E.
       KEY_COUNTER_KIND = 'counter_kind'
       KEY_COUNTER_ARTWORK_PATH = 'counter_artwork_image_path'
+      # Freestanding floor-slide lock (v0.1.78+): instance may translate in XY
+      # (and rotate about Z) but feet stay on floorspace top — no sink/lift.
+      KEY_FLOOR_SLIDE = 'floor_slide'
       # Media screen Small/Large on straight S/E (flexilink stays).
       KEY_SCREEN_TYPE = 'screen_type'
       KEY_SCREEN_KIND = 'screen_kind'
