@@ -7,6 +7,10 @@
 #   - Screen 50 mm in front of graphic outer face
 #   - Centred on the bay (midpoint of hinge/free posts)
 #   - Soft edges via Geometry.soften_definition_edges!
+# v0.1.76: replace oversized (~2000 m) Samsung SKPs with Richard’s new
+# Media_screen_-_{small,Large}.skp. Fresh defn names. Strip Sree scale figure
+# from Large. Metres-correct bake: if largest axis > 10 m, scale ×0.001
+# (mm-authored-as-metres) up to 3× — same class of fix as Oval upright bake.
 
 module ISOframe
   module StandDesigner
@@ -18,14 +22,15 @@ module ISOframe
           kind: 'small',
           label: 'Media Screen Small',
           skp_file: 'Media_screen_-_small.skp',
-          defn_name: 'ISOframe Media Screen Small v75',
+          # Fresh name so dealers drop any cached v75 kilometre-scale bake.
+          defn_name: 'ISOframe Media Screen Small v76',
           instance_name: 'ISOframe Media Screen Small'
         },
         'large' => {
           kind: 'large',
           label: 'Media Screen Large',
           skp_file: 'Media_screen_-_Large.skp',
-          defn_name: 'ISOframe Media Screen Large v75',
+          defn_name: 'ISOframe Media Screen Large v76',
           instance_name: 'ISOframe Media Screen Large'
         }
       }.freeze
@@ -33,6 +38,11 @@ module ISOframe
       # LOCKED v0.1.75 — do not change unless Richard asks.
       SCREEN_CENTER_Z_MM = 1500.0
       SCREEN_IN_FRONT_OF_GRAPHIC_MM = 50.0
+      # Exhibition screen upper bound. Anything larger is almost certainly a
+      # units mistake (mm numbers stored as metres → ~1000× too big).
+      SANE_MAX_EXTENT_MM = 10_000.0
+      MM_AS_METRES_SCALE = 0.001
+      MAX_SCALE_CORRECTIONS = 3
 
       SKIP_NAME_RE = /
         \bsree\b|
@@ -240,6 +250,9 @@ module ISOframe
         root = model.definitions.load(path)
         raise "Failed to load #{File.basename(path)}" unless root
 
+        # Large SKP may still carry the SketchUp Sree sampler — strip before pick.
+        strip_scale_figures_from_definition!(root)
+
         src = pick_screen_source(model, root)
         raise "No media screen geometry in #{File.basename(path)}" unless src
 
@@ -247,11 +260,30 @@ module ISOframe
         defn.entities.clear! if defn.entities.size > 0
 
         local = orient_screen_to_bake(src)
+        local = metres_correct_transform(src, local)
         inst = defn.entities.add_instance(src, local)
         inst.name = entry[:instance_name] if inst.respond_to?(:name=)
         Geometry.soften_definition_edges!(defn)
-        puts "[ISOframe] Media screen bake kind=#{entry[:kind]} src=#{src.name.inspect}"
+        dims = oriented_extent_mm(src, local)
+        puts "[ISOframe] Media screen bake kind=#{entry[:kind]} src=#{src.name.inspect} " \
+             "extent_mm=#{dims.map { |v| v.round(1) }.inspect}"
         defn
+      end
+
+      def strip_scale_figures_from_definition!(defn)
+        return unless defn && defn.valid?
+        defn.entities.to_a.each do |e|
+          next unless e.is_a?(Sketchup::ComponentInstance) || e.is_a?(Sketchup::Group)
+          n = if e.is_a?(Sketchup::ComponentInstance)
+                e.definition.name.to_s
+              else
+                e.name.to_s
+              end
+          next unless n =~ /\bsree\b/i || n =~ /scale\s*figure/i
+          e.erase! if e.valid?
+        end
+      rescue StandardError => e
+        puts "[ISOframe] strip_scale_figures_from_definition! failed: #{e.message}"
       end
 
       def pick_screen_source(model, root)
@@ -267,11 +299,13 @@ module ISOframe
           rescue StandardError
             faces = 0
           end
-          next if faces < 4
+          next if faces < 1
           score = 0.0
           score += 80.0 if n =~ SCREEN_NAME_RE
           score += 40.0 if n =~ /samsung|slim\s*tv|wide\s*screen/i
-          score += [faces, 4000].min * 0.01
+          score += 20.0 if n =~ /media|screen|tv|panel|monitor/i
+          # Prefer simple black-box panels (new SKPs) over dense meshes.
+          score += faces <= 24 ? 25.0 : [faces, 4000].min * 0.01
           begin
             bb = d.bounds
             unless bb.nil? || bb.empty?
@@ -281,6 +315,8 @@ module ISOframe
               dims = [dx, dy, dz].sort
               # Flat panel-ish: one thin axis, two larger.
               score += 30.0 if dims[0] < 200.0 && dims[1] >= 200.0
+              # Human-scale figure leftover (if name skip missed).
+              score -= 60.0 if dz.between?(1400.0, 2200.0) && dims[0] > 200.0
               score -= 40.0 if dx > 4000.0 || dy > 4000.0
             end
           rescue StandardError
@@ -342,6 +378,34 @@ module ISOframe
         end
 
         center_at_origin_after(src, rot)
+      end
+
+      # If SKP geometry is ~1000× too big (mm numbers as metres → kilometres),
+      # scale down until largest axis ≤ 10 m. Re-centre after each scale.
+      def metres_correct_transform(src, tr)
+        MAX_SCALE_CORRECTIONS.times do
+          dims = oriented_extent_mm(src, tr)
+          max_mm = dims.max
+          break if max_mm <= SANE_MAX_EXTENT_MM
+          origin = Geom::Point3d.new(0, 0, 0)
+          scale = Geom::Transformation.scaling(
+            origin, MM_AS_METRES_SCALE, MM_AS_METRES_SCALE, MM_AS_METRES_SCALE
+          )
+          tr = scale * tr
+          puts "[ISOframe] Media screen metres-correct ×#{MM_AS_METRES_SCALE} " \
+               "(was max #{max_mm.round(1)} mm)"
+        end
+        center_at_origin_after(src, tr)
+      end
+
+      def oriented_extent_mm(src, tr)
+        bb = src.bounds
+        return [0.0, 0.0, 0.0] if bb.nil? || bb.empty?
+        corners = bound_corners(bb).map { |p| p.transform(tr) }
+        dx = corners.map(&:x).minmax.then { |a, b| (b - a).abs } / 1.mm
+        dy = corners.map(&:y).minmax.then { |a, b| (b - a).abs } / 1.mm
+        dz = corners.map(&:z).minmax.then { |a, b| (b - a).abs } / 1.mm
+        [dx, dy, dz]
       end
 
       def bound_corners(bb)
