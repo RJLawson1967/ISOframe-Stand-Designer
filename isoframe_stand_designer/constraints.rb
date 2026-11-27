@@ -101,12 +101,19 @@ module ISOframe
         Attributes.get(entity, Constants::KEY_TYPE).to_s == Constants::TYPE_COUNTER
       end
 
+      def fabric_wall?(entity)
+        return false unless entity && entity.valid?
+        return false unless entity.is_a?(Sketchup::ComponentInstance)
+        return true if Attributes.get(entity, Constants::KEY_TYPE).to_s == Constants::TYPE_FABRIC_WALL
+        Attributes.get(entity, Constants::KEY_RANGE).to_s == Constants::RANGE_FABRIC
+      end
+
       # Anything whose feet must stay on the floorspace top.
       def floor_sitting?(entity)
         return false unless entity && entity.valid?
         return false if defined?(Tables) && Tables.table_instance?(entity)
         return false if defined?(Screens) && Screens.screen_instance?(entity)
-        isoframe_module?(entity) || freestanding_floor?(entity)
+        isoframe_module?(entity) || freestanding_floor?(entity) || fabric_wall?(entity)
       end
 
       def mark_floor_slide!(entity)
@@ -156,11 +163,11 @@ module ISOframe
         entity.transformation.origin.z
       end
 
-      # Wave: origin Z is the foot sole (place contract).
+      # Wave + Fabric: origin Z is the foot sole (place contract).
       # Freestanding: world AABB min Z (feet of baked mesh).
       def world_feet_z(entity)
         return 0.0 unless entity && entity.valid?
-        if isoframe_module?(entity)
+        if isoframe_module?(entity) || fabric_wall?(entity)
           return world_origin_z(entity)
         end
         bb = entity.bounds

@@ -4,10 +4,13 @@ module ISOframe
     module Constants
       DICT = 'ISOframe_StandDesigner'
       RANGE_WAVE = 'wave'
+      RANGE_FABRIC = 'fabric'
       TYPE_STARTER = 'starter'
       TYPE_EXTENSION = 'extension'
       TYPE_FLOORSPACE = 'floorspace'
       TYPE_COUNTER = 'counter'
+      TYPE_FABRIC_WALL = 'fabric_wall'
+      KEY_FABRIC_WIDTH_MM = 'fabric_width_mm'
       POST_MM = 37.0
       HALF_POST_MM = POST_MM / 2.0
       GRAPHIC_BAY_MM = 800.0

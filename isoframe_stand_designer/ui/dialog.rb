@@ -6,6 +6,7 @@
 #
 # v0.1.81: product tabs (Wave / Fabric / Lumen / Ripple / ISObar / Express).
 # Wave actions go through Products::Wave facade only.
+# v0.1.82: Floorspace shared above tabs; Fabric place + edge-snap callbacks.
 
 module ISOframe
   module StandDesigner
@@ -30,11 +31,11 @@ module ISOframe
       def build_dialog
         dlg = UI::HtmlDialog.new(
           dialog_title: 'ISOframe Stand Designer',
-          preferences_key: 'ISOframeStandDesignerDialog_v0181',
+          preferences_key: 'ISOframeStandDesignerDialog_v0182',
           scrollable: true,
           resizable: true,
-          width: 280,
-          height: 720,
+          width: 300,
+          height: 740,
           style: UI::HtmlDialog::STYLE_DIALOG
         )
 
@@ -58,8 +59,10 @@ module ISOframe
           end
         end
 
+        # Shared floorspace (above tabs) — Floorspace module only, not product-owned.
+        bind.call('run_floorspace') { Floorspace.prompt_and_draw! }
+
         # Wave tab — Products::Wave facade (firewall).
-        bind.call('run_floorspace') { Products::Wave.run_floorspace! }
         bind.call('run_starter') { Products::Wave.run_starter! }
         bind.call('run_extension') { Products::Wave.run_extension! }
         bind.call('run_flex') { Products::Wave.run_flex! }
@@ -73,6 +76,10 @@ module ISOframe
         bind.call('run_counter_oval') { Products::Wave.run_counter_oval! }
         bind.call('run_screen_small') { Products::Wave.run_screen_small! }
         bind.call('run_screen_large') { Products::Wave.run_screen_large! }
+
+        # Fabric tab — Products::Fabric only (no Wave flex).
+        bind.call('run_fabric_place') { Products::Fabric.run_place_midi! }
+        bind.call('run_fabric_edge_snap') { Products::Fabric.run_edge_snap! }
       end
     end
   end
