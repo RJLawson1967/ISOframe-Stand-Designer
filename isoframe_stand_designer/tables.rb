@@ -69,6 +69,7 @@
 # orientation, flexilink delete, and host-follow as Keyboard; shape SKP only differs.
 # v0.1.72: table place locks kept (still no wrap on place). Artwork UI unified
 # under Add Artwork; freestanding Oval Counter is separate (see counters.rb).
+# v0.1.74: soft/smooth/hide edges on table bake (+ wrap SKP when apply instances).
 
 module ISOframe
   module StandDesigner
@@ -517,7 +518,10 @@ module ISOframe
       def keyboard_definition!(model, entry)
         defn_name = entry[:defn_name].to_s
         existing = model.definitions[defn_name]
-        return existing if existing && !existing.image? && existing.entities.size > 0
+        if existing && !existing.image? && existing.entities.size > 0
+          Geometry.soften_definition_edges!(existing)
+          return existing
+        end
 
         skp_name = entry[:skp_file] || SKP_KEYBOARD
         path = MeshImport.model_path(skp_name)
@@ -573,6 +577,7 @@ module ISOframe
         # v0.1.71: do NOT load/instance Keyboard_table_graphic_wrap.skp on Place.
         # v0.1.70 broad match + root fallback spawned a distant orphan wrap.
         # Apply Table Artwork still calls ensure_graphic_wrap_target! on apply only.
+        Geometry.soften_definition_edges!(defn)
         dump = dump_baked_entity_names(defn.entities, 0)
         puts "[ISOframe] Table bake entities: #{dump}"
         lip = find_keyboard_lip_entity(defn.entities, 0)
@@ -1101,6 +1106,7 @@ module ISOframe
         hit = find_graphic_wrap_with_transform(table_defn.entities, 0, identity_transform)
         if hit && hit[0]
           mark_as_table_graphic!(hit[0])
+          Geometry.soften_definition_edges!(table_defn)
           puts "[ISOframe] graphic wrap already in bake name=#{hit[0].name} def=#{def_name_of(hit[0])}"
           return hit
         end
@@ -1147,6 +1153,8 @@ module ISOframe
         rescue StandardError
           nil
         end
+        Geometry.soften_definition_edges!(gdef)
+        Geometry.soften_definition_edges!(table_defn)
         puts "[ISOframe] INSTANCED wrap from #{path} def=#{gdef.name.inspect} " \
              "origin=#{local.origin}"
         [inst, local]

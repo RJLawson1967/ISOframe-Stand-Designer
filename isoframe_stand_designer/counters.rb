@@ -7,6 +7,7 @@
 # bake only the counter mesh into a plugin definition.
 # v0.1.73: STL/CAD import lies on its side in SketchUp (Y-up). LOCK upright bake:
 # +90° about +X so feet sit on the floor (min Z); then translate so min Z = 0.
+# v0.1.74: soft/smooth/hide all edges on bake (and cached defs) — clean import look.
 
 module ISOframe
   module StandDesigner
@@ -86,7 +87,10 @@ module ISOframe
         raise ArgumentError, "Unknown counter: #{kind}" unless entry
         defn_name = entry[:defn_name]
         existing = model.definitions[defn_name]
-        return existing if existing && !existing.image? && existing.entities.size > 0
+        if existing && !existing.image? && existing.entities.size > 0
+          Geometry.soften_definition_edges!(existing)
+          return existing
+        end
 
         path = MeshImport.model_path(entry[:skp_file])
         raise "Missing bundled SKP: #{File.basename(path)}" unless File.file?(path)
@@ -103,6 +107,7 @@ module ISOframe
         local = upright_sit_transform(src, kind)
         inst = defn.entities.add_instance(src, local)
         inst.name = entry[:instance_name] if inst.respond_to?(:name=)
+        Geometry.soften_definition_edges!(defn)
         puts "[ISOframe] Counter bake kind=#{kind} src=#{src.name.inspect} " \
              "upright_x=#{OVAL_UPRIGHT_ROT_X_DEG}° entities=#{defn.entities.size}"
         defn

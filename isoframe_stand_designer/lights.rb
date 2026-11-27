@@ -93,7 +93,10 @@ module ISOframe
       # Load LED_Flood_Light.skp; bake arm → +Y into DEFN_FLOOD. Mesh untouched.
       def flood_definition!(model)
         existing = model.definitions[DEFN_FLOOD]
-        return existing if existing && !existing.image? && existing.entities.size > 0
+        if existing && !existing.image? && existing.entities.size > 0
+          Geometry.soften_definition_edges!(existing)
+          return existing
+        end
 
         path = MeshImport.model_path(SKP_FLOOD)
         unless File.file?(path)
@@ -123,7 +126,7 @@ module ISOframe
         # place cannot drop it (v0.1.46–47 fixed −90° never showed for Richard).
         inst = defn.entities.add_instance(loaded, rot)
         inst.explode if inst.respond_to?(:explode)
-        soften_definition_edges!(defn)
+        Geometry.soften_definition_edges!(defn)
         defn
       end
 
@@ -201,45 +204,6 @@ module ISOframe
         group.entities.add_instance(flood_defn, yaw)
         group.transform!(move)
         group
-      end
-
-      # Soft/smooth/hide edges for a clean look — does not move vertices.
-      def soften_definition_edges!(defn, seen = nil)
-        seen ||= {}
-        return unless defn
-        return if seen[defn.object_id]
-        seen[defn.object_id] = true
-
-        defn.entities.to_a.each do |e|
-          next unless e && e.valid?
-          if e.is_a?(Sketchup::Edge)
-            e.soft = true
-            e.smooth = true
-            e.hidden = true
-          elsif e.is_a?(Sketchup::ComponentInstance)
-            soften_definition_edges!(e.definition, seen)
-          elsif e.is_a?(Sketchup::Group)
-            soften_entities_edges!(e.entities, seen)
-          end
-        end
-      rescue StandardError => e
-        puts "[ISOframe] soften light edges failed: #{e.message}"
-      end
-
-      def soften_entities_edges!(ents, seen)
-        return unless ents
-        ents.to_a.each do |e|
-          next unless e && e.valid?
-          if e.is_a?(Sketchup::Edge)
-            e.soft = true
-            e.smooth = true
-            e.hidden = true
-          elsif e.is_a?(Sketchup::ComponentInstance)
-            soften_definition_edges!(e.definition, seen)
-          elsif e.is_a?(Sketchup::Group)
-            soften_entities_edges!(e.entities, seen)
-          end
-        end
       end
 
       def clear_light_groups!(defn)
