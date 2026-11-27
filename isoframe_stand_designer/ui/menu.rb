@@ -2,6 +2,7 @@
 # Extensions → ISOframe Stand Designer.
 # v0.1.81: Panel / License / About at top level; Wave tools under Wave submenu.
 # Other product lines get empty “coming soon” submenus (firewall shells).
+# v0.1.82: Fabric submenu — Place Midi + Edge Snap (no flex).
 
 module ISOframe
   module StandDesigner
@@ -22,9 +23,11 @@ module ISOframe
           )
         end
         menu.add_separator
+        menu.add_item('New Job / Floorspace…') { Floorspace.prompt_and_draw! }
+        menu.add_separator
 
         install_wave_submenu!(menu)
-        install_shell_submenu!(menu, 'fabric', Products::Fabric)
+        install_fabric_submenu!(menu)
         install_shell_submenu!(menu, 'lumen', Products::Lumen)
         install_shell_submenu!(menu, 'ripple', Products::Ripple)
         install_shell_submenu!(menu, 'isobar', Products::ISObar)
@@ -35,9 +38,6 @@ module ISOframe
 
       def install_wave_submenu!(menu)
         wave = menu.add_submenu(Products.label_for('wave'))
-        wave.add_item('New Job…') { Products::Wave.run_floorspace! }
-        wave.add_item('Floorspace…') { Products::Wave.run_floorspace! }
-        wave.add_separator
         wave.add_item('Place Starter') { Products::Wave.run_starter! }
         wave.add_item('Place Extension') { Products::Wave.run_extension! }
         wave.add_item('Flex…') { Products::Wave.run_flex! }
@@ -52,6 +52,12 @@ module ISOframe
         wave.add_item('Oval Counter') { Products::Wave.run_counter_oval! }
         wave.add_item('Media Screen Small') { Products::Wave.run_screen_small! }
         wave.add_item('Media Screen Large') { Products::Wave.run_screen_large! }
+      end
+
+      def install_fabric_submenu!(menu)
+        fabric = menu.add_submenu(Products.label_for('fabric'))
+        fabric.add_item('Place Fabric Midi (900×2270)') { Products::Fabric.run_place_midi! }
+        fabric.add_item('Fabric Edge Snap…') { Products::Fabric.run_edge_snap! }
       end
 
       def install_shell_submenu!(menu, id, mod)

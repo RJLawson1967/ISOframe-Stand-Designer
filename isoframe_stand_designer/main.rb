@@ -32,6 +32,10 @@ module ISOframe
         tools/add_screen
         products
         products/wave
+        products/fabric/constants
+        products/fabric/geometry
+        products/fabric/place_tool
+        products/fabric/edge_snap_tool
         products/fabric
         products/lumen
         products/ripple

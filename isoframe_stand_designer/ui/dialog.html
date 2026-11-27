@@ -103,6 +103,8 @@
 </head>
 <body>
   <h1>ISOframe Stand Designer</h1>
+  <!-- Shared across products (v0.1.82) — above tabs. -->
+  <button type="button" class="action" onclick="isoRun('run_floorspace')" style="display:block;width:100%;margin:0 0 8px;padding:8px 10px;font-size:12px;cursor:pointer;border:1px solid #ccc;border-radius:4px;background:#f7f7f7;box-sizing:border-box;">New Job / Floorspace…</button>
   <div class="tabs" role="tablist">
     <button type="button" data-tab="wave" class="active" onclick="isoShowTab('wave')">Wave</button>
     <button type="button" data-tab="fabric" onclick="isoShowTab('fabric')">Fabric</button>
@@ -113,7 +115,6 @@
   </div>
 
   <div id="panel-wave" class="panel active" role="tabpanel">
-    <button type="button" class="action" onclick="isoRun('run_floorspace')">New Job / Floorspace…</button>
     <button type="button" class="action" onclick="isoRun('run_starter')">Place Starter</button>
     <button type="button" class="action" onclick="isoRun('run_extension')">Place Extension</button>
     <button type="button" class="action" onclick="isoRun('run_flex')">Flex…</button>
@@ -143,7 +144,14 @@
   </div>
 
   <div id="panel-fabric" class="panel" role="tabpanel">
-    <div class="shell">Fabric — coming soon</div>
+    <button type="button" class="action" onclick="isoRun('run_fabric_place')">Place Fabric Midi (900×2270)</button>
+    <button type="button" class="action" onclick="isoRun('run_fabric_edge_snap')">Fabric Edge Snap…</button>
+    <p class="hint">
+      No flex. Place a Midi starter on the floorspace, then Edge Snap:
+      drag the top edge for height (Midi 2270 / Maxi 2470 / Super-Maxi 3000 /
+      Ultra-Maxi 3470); drag a side for width every 250 mm (900 starter +
+      1000/750/500/250 extensions under the hood). 37 mm Al posts.
+    </p>
   </div>
   <div id="panel-lumen" class="panel" role="tabpanel">
     <div class="shell">Lumen — coming soon</div>
