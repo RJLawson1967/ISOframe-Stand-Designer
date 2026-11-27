@@ -11,6 +11,9 @@
 # Media_screen_-_{small,Large}.skp. Fresh defn names. Strip Sree scale figure
 # from Large. Metres-correct bake: if largest axis > 10 m, scale ×0.001
 # (mm-authored-as-metres) up to 3× — same class of fix as Oval upright bake.
+# v0.1.77: bake ONLY from the loaded SKP root (do not scan the whole model —
+# that reused Small when placing Large). LOCK landscape: +90° about +Y so
+# portrait SKPs become landscape. Attach position locks unchanged.
 
 module ISOframe
   module StandDesigner
@@ -22,15 +25,15 @@ module ISOframe
           kind: 'small',
           label: 'Media Screen Small',
           skp_file: 'Media_screen_-_small.skp',
-          # Fresh name so dealers drop any cached v75 kilometre-scale bake.
-          defn_name: 'ISOframe Media Screen Small v76',
+          # Fresh name so dealers drop any cached v75–v76 bake.
+          defn_name: 'ISOframe Media Screen Small v77',
           instance_name: 'ISOframe Media Screen Small'
         },
         'large' => {
           kind: 'large',
           label: 'Media Screen Large',
           skp_file: 'Media_screen_-_Large.skp',
-          defn_name: 'ISOframe Media Screen Large v76',
+          defn_name: 'ISOframe Media Screen Large v77',
           instance_name: 'ISOframe Media Screen Large'
         }
       }.freeze
@@ -43,26 +46,9 @@ module ISOframe
       SANE_MAX_EXTENT_MM = 10_000.0
       MM_AS_METRES_SCALE = 0.001
       MAX_SCALE_CORRECTIONS = 3
-
-      SKIP_NAME_RE = /
-        \bsree\b|
-        floorspace|
-        isoframe\s*wave|
-        wave\s*(starter|extension)|
-        flexibeam|
-        flood\s*light|
-        led\s*flood|
-        \bprice\b
-      /ix
-
-      SCREEN_NAME_RE = /
-        samsung|
-        smart\s*tv|
-        wide\s*screen|
-        very\s*slim\s*tv|
-        media\s*screen|
-        \btv\b
-      /ix
+      # LOCKED v0.1.77 — SKPs arrive portrait; +90° about +Y → landscape
+      # (width along X, height along Z). Thin axis stays Y (faces room).
+      LANDSCAPE_ROT_Y_DEG = 90.0
 
       def label_for(kind)
         entry = REGISTRY[kind.to_s]
@@ -244,28 +230,41 @@ module ISOframe
           return existing
         end
 
-        path = MeshImport.model_path(entry[:skp_file])
-        raise "Missing bundled SKP: #{File.basename(path)}" unless File.file?(path)
+        skp_name = entry[:skp_file].to_s
+        path = MeshImport.model_path(skp_name)
+        raise "Missing bundled SKP: #{skp_name}" unless File.file?(path)
+        # Guard: Large must never resolve to the small file (and vice versa).
+        bas = File.basename(path)
+        raise "Screen SKP path mismatch: expected #{skp_name}, got #{bas}" unless bas == skp_name
 
         root = model.definitions.load(path)
-        raise "Failed to load #{File.basename(path)}" unless root
+        raise "Failed to load #{skp_name}" unless root
 
-        # Large SKP may still carry the SketchUp Sree sampler — strip before pick.
+        # Large SKP may still carry the SketchUp Sree sampler — strip before bake.
         strip_scale_figures_from_definition!(root)
 
-        src = pick_screen_source(model, root)
-        raise "No media screen geometry in #{File.basename(path)}" unless src
+        # Bake ONLY this SKP’s root. Do not scan model.definitions — a prior
+        # Small bake is named “Media Screen…” and would win the score for Large.
+        src = root
+        faces = begin
+          count_faces_deep(src.entities, 0)
+        rescue StandardError
+          0
+        end
+        raise "No media screen geometry in #{skp_name}" if faces < 1
 
         defn = existing || model.definitions.add(defn_name)
         defn.entities.clear! if defn.entities.size > 0
 
         local = orient_screen_to_bake(src)
+        local = landscape_transform(src, local)
         local = metres_correct_transform(src, local)
         inst = defn.entities.add_instance(src, local)
         inst.name = entry[:instance_name] if inst.respond_to?(:name=)
         Geometry.soften_definition_edges!(defn)
         dims = oriented_extent_mm(src, local)
-        puts "[ISOframe] Media screen bake kind=#{entry[:kind]} src=#{src.name.inspect} " \
+        puts "[ISOframe] Media screen bake kind=#{entry[:kind]} skp=#{skp_name} " \
+             "src=#{src.name.inspect} landscape_y=#{LANDSCAPE_ROT_Y_DEG}° " \
              "extent_mm=#{dims.map { |v| v.round(1) }.inspect}"
         defn
       end
@@ -284,51 +283,6 @@ module ISOframe
         end
       rescue StandardError => e
         puts "[ISOframe] strip_scale_figures_from_definition! failed: #{e.message}"
-      end
-
-      def pick_screen_source(model, root)
-        scored = []
-        model.definitions.each do |d|
-          next unless d && d.valid?
-          next if d.respond_to?(:image?) && d.image?
-          n = d.name.to_s
-          next if n =~ SKIP_NAME_RE
-          faces = 0
-          begin
-            faces = count_faces_deep(d.entities, 0)
-          rescue StandardError
-            faces = 0
-          end
-          next if faces < 1
-          score = 0.0
-          score += 80.0 if n =~ SCREEN_NAME_RE
-          score += 40.0 if n =~ /samsung|slim\s*tv|wide\s*screen/i
-          score += 20.0 if n =~ /media|screen|tv|panel|monitor/i
-          # Prefer simple black-box panels (new SKPs) over dense meshes.
-          score += faces <= 24 ? 25.0 : [faces, 4000].min * 0.01
-          begin
-            bb = d.bounds
-            unless bb.nil? || bb.empty?
-              dx = (bb.max.x - bb.min.x).abs / 1.mm
-              dy = (bb.max.y - bb.min.y).abs / 1.mm
-              dz = (bb.max.z - bb.min.z).abs / 1.mm
-              dims = [dx, dy, dz].sort
-              # Flat panel-ish: one thin axis, two larger.
-              score += 30.0 if dims[0] < 200.0 && dims[1] >= 200.0
-              # Human-scale figure leftover (if name skip missed).
-              score -= 60.0 if dz.between?(1400.0, 2200.0) && dims[0] > 200.0
-              score -= 40.0 if dx > 4000.0 || dy > 4000.0
-            end
-          rescue StandardError
-            nil
-          end
-          scored << [score, d]
-        end
-        scored.sort_by! { |s, _| -s }
-        return root if scored.empty? && root && root.valid?
-        return nil if scored.empty?
-        puts "[ISOframe] Media screen source=#{scored.first[1].name.inspect} score=#{scored.first[0].round(1)}"
-        scored.first[1]
       end
 
       def count_faces_deep(entities, depth)
@@ -378,6 +332,16 @@ module ISOframe
         end
 
         center_at_origin_after(src, rot)
+      end
+
+      # LOCKED v0.1.77 — portrait SKP → landscape via +90° about +Y (thin/face axis).
+      def landscape_transform(src, tr)
+        origin = Geom::Point3d.new(0, 0, 0)
+        y_axis = Geom::Vector3d.new(0, 1, 0)
+        rot_y = Geom::Transformation.rotation(
+          origin, y_axis, LANDSCAPE_ROT_Y_DEG * Math::PI / 180.0
+        )
+        center_at_origin_after(src, rot_y * tr)
       end
 
       # If SKP geometry is ~1000× too big (mm numbers as metres → kilometres),
