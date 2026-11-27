@@ -67,6 +67,8 @@
 # Artwork is untouched and still calls ensure_graphic_wrap_target! on apply.
 # Also: Semi-circular + Square table attachments — same S+E host attach, offsets,
 # orientation, flexilink delete, and host-follow as Keyboard; shape SKP only differs.
+# v0.1.72: table place locks kept (still no wrap on place). Artwork UI unified
+# under Add Artwork; freestanding Oval Counter is separate (see counters.rb).
 
 module ISOframe
   module StandDesigner

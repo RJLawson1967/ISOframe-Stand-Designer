@@ -39,6 +39,8 @@
 # nested defs; prove face.material.texture non-nil; dialog reports tex size.
 # v0.1.68: bake never contains Rolable wrap (Boss-Extrude only) — always instance
 # Keyboard_table_graphic_wrap.skp into bake on place + apply before paint.
+# v0.1.72: one Add Artwork entry — paints the blue-frame selection (wall / table /
+# freestanding Oval Counter full wrap). Wall wallpaper rules unchanged.
 
 module ISOframe
   module StandDesigner
@@ -49,6 +51,127 @@ module ISOframe
       MIN_FRONT_AREA_MM2 = 400.0
       MIN_TRI_AREA_IN2 = 1.0e-6
       MIN_UV_AREA = 1.0e-8
+
+      # Unified panel/menu entry: paint whatever is highlighted.
+      # Priority: freestanding counter → table attachment → Wave wall module.
+      def prompt_and_add!
+        return unless License.require_active!
+        model = Sketchup.active_model
+        counter = selected_counter_instance(model)
+        if counter
+          return prompt_and_apply_counter!(counter)
+        end
+        table = selected_table_instance(model)
+        unless table
+          host = selected_wave_module(model)
+          table = Tables.find_table_instance_for_host(host) if host && Tables.table_on?(host)
+          # Only treat as table when the table itself is selected, or the user
+          # clearly picked a table-bearing module with no other intent — if the
+          # Wave module is selected, prefer wall wallpaper (existing behaviour).
+          table = nil if host && table && model.selection.include?(host) && !model.selection.include?(table)
+        end
+        if table && table.valid?
+          return prompt_and_apply_table!
+        end
+        seed = selected_wave_module(model)
+        if seed
+          return prompt_and_apply!
+        end
+        UI.messagebox(
+          "Select something in the blue frame, then Add Artwork again.\n\n" \
+          "Works on:\n" \
+          "• Wave starter/extension (wall wallpaper)\n" \
+          "• Keyboard / Semi-circular / Square table\n" \
+          "• Oval Counter (full wrap)"
+        )
+        false
+      end
+
+      def selected_counter_instance(model)
+        return nil unless defined?(Counters)
+        Counters.selected_counter(model)
+      end
+
+      def prompt_and_apply_counter!(counter = nil)
+        return unless License.require_active!
+        model = Sketchup.active_model
+        counter ||= selected_counter_instance(model)
+        unless counter && counter.valid?
+          UI.messagebox("Select an Oval Counter, then Add Artwork again.")
+          return false
+        end
+        path = UI.openpanel('Choose counter artwork image', '', IMAGE_FILTER)
+        return false if path.nil? || path.to_s.strip.empty?
+        path = normalize_image_path(path)
+        unless path && File.file?(path)
+          UI.messagebox("File not found:\n#{path}")
+          return false
+        end
+        apply_to_counter!(counter, path)
+      end
+
+      def apply_to_counter!(counter_inst, image_path)
+        model = counter_inst.model
+        image_path = normalize_image_path(image_path)
+        unless image_path && File.file?(image_path)
+          UI.messagebox("File not found:\n#{image_path}")
+          return false
+        end
+        model.start_operation('ISOframe Add Artwork (Counter)', true)
+        begin
+          Attributes.set(counter_inst, Constants::KEY_COUNTER_ARTWORK_PATH, image_path.to_s)
+          painted = map_counter_instance!(counter_inst, image_path)
+          if painted <= 0
+            raise 'No oval wrap faces found to paint (vertical body only; top left plain).'
+          end
+          model.commit_operation
+          msg = "Counter artwork applied (#{painted} wrap face#{painted == 1 ? '' : 's'}; " \
+                'full wraparound). Countertop left unpainted.'
+          Sketchup.status_text = msg
+          UI.messagebox(msg)
+          true
+        rescue StandardError => e
+          model.abort_operation
+          UI.messagebox("Add Artwork (counter) failed:\n#{e.message}")
+          false
+        end
+      end
+
+      def map_counter_instance!(counter_inst, image_path)
+        return 0 unless counter_inst && counter_inst.valid?
+        defn = counter_inst.definition
+        begin
+          if counter_inst.respond_to?(:make_unique) && defn.count_instances.to_i > 1
+            counter_inst.make_unique
+            defn = counter_inst.definition
+          end
+        rescue StandardError
+          nil
+        end
+
+        faces = Counters.select_wrap_faces(defn)
+        if faces.empty?
+          raise 'Oval Counter has no vertical wrap faces.'
+        end
+        width_mm, height_mm, path_local = Counters.wrap_path_and_size(faces)
+        kind = Attributes.get(counter_inst, Constants::KEY_COUNTER_KIND, 'oval').to_s
+        source = load_source_rep!(image_path)
+        mat = ensure_wrap_material_like_wall!(
+          counter_inst.model, "counter-#{kind}-#{counter_inst.entityID}",
+          source, image_path, width_mm, height_mm
+        )
+        unless mat && mat.texture
+          raise 'Counter material has no texture after load.'
+        end
+        painted = map_wrap_faces_like_wall!(faces, mat, path_local, height_mm)
+        textured = count_faces_with_texture(faces)
+        if textured <= 0
+          raise 'Paint ran but face.material.texture is nil on counter wrap.'
+        end
+        puts "[ISOframe] Counter wrap painted=#{painted} textured=#{textured} " \
+             "w=#{width_mm.round(1)}mm h=#{height_mm.round(1)}mm"
+        painted
+      end
 
       # --- Pure math (no SketchUp). U window of bay i in a strip of width tex_w. ---
       # Returns [u0, u1] in the same units as tex_w. Bay 0 → [0, tex_w/n]; last →
