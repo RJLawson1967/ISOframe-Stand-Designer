@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-# Fabric product (v0.1.91) — place Midi, Frame Size (grows right), Join 90°.
+# Fabric product (v0.1.92) — place Midi, Frame Size (grows right), Join 90° ends.
 # Fabric covers entire Al frame; all geometry above floorspace top.
 # Firewall: no Wave flex / Geometry rebuild. Floorspace is shared UI only.
 

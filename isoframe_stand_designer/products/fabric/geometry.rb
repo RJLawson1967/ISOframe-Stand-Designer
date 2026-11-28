@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Procedural Fabric wall (v0.1.91) — 37mm Al frame + 12.5mm round braces, fabric cover.
-# Starter packs viewer-LEFT; Join post at OUTER corner (plan), purple graphics inside.
+# Procedural Fabric wall (v0.1.92) — 37mm Al frame + 12.5mm round braces, fabric cover.
+# Starter packs viewer-LEFT; Join picks left/right ends so the L can flip either way.
 
 module ISOframe
   module StandDesigner
@@ -95,6 +95,27 @@ module ISOframe
             world_point_on_wall(wall, w)
           end
 
+          # :left / :right tip in world (viewer sense under ψ=180°).
+          def tip_world_for_end(wall, end_sym)
+            if end_sym.to_sym == :left
+              viewer_left_tip_world(wall)
+            else
+              viewer_right_tip_world(wall)
+            end
+          end
+
+          # Nearest viewer end of wall to a world point (:left or :right).
+          def nearest_end_at_point(wall, point)
+            return :right unless wall && wall.valid? && point
+            pl = viewer_left_tip_world(wall)
+            pr = viewer_right_tip_world(wall)
+            dl = pl.distance(point)
+            dr = pr.distance(point)
+            dl <= dr ? :left : :right
+          rescue StandardError
+            :right
+          end
+
           # After rebuild to a new width: keep viewer-LEFT (starter side) fixed in
           # world; shift instance so added length appears on viewer-RIGHT.
           def shift_for_widen_right!(wall, old_width_mm, new_width_mm)
@@ -134,19 +155,21 @@ module ISOframe
           end
 
           # Snap wall_b to wall_a at 90° with a 37mm join post in the OUTER corner pocket.
-          # Plan (join-90-plan.png): red post at outer corner; blue Al butts post faces
-          # (no overlap); outer edges flush with post outer faces; purple graphics INSIDE.
-          def join_walls_at_right_angle!(wall_a, wall_b)
+          # end_a / end_b = :left | :right (viewer ends that mate). Choosing ends flips the L.
+          # Plan: red post outer corner; blue Al butts post; purple graphics INSIDE.
+          def join_walls_at_right_angle!(wall_a, wall_b, end_a: :right, end_b: :right)
             return false unless wall_a && wall_a.valid? && wall_b && wall_b.valid?
             return false if wall_a.entityID == wall_b.entityID
+            end_a = end_a.to_sym == :left ? :left : :right
+            end_b = end_b.to_sym == :left ? :left : :right
             model = wall_a.model
             ha = wall_height_key(wall_a)
             hb = wall_height_key(wall_b)
             tip_h = [post_tip_mm(ha), post_tip_mm(hb)].min
+            wb = wall_local_width_mm(wall_b)
             half = C::HALF_POST_MM
 
-            # A's viewer-right outer tip (local x=0 end face centre).
-            tip = viewer_right_tip_world(wall_a)
+            tip = tip_world_for_end(wall_a, end_a)
             z = Floorspace.module_base_z(model)
             tip = Geom::Point3d.new(tip.x, tip.y, z)
 
@@ -160,37 +183,68 @@ module ISOframe
               ya = Geom::Vector3d.new(0, -1, 0)
             end
 
-            # Outer-corner pocket: past A's end only, SAME Y span as posts
-            #   x ∈ [-POST, 0], y ∈ [-half, +half]
-            # → outer faces of A and join flush at y=−half; A end butts x=0.
-            # Inner vertex of join (where both frame ends meet) = tip + ya*half.
+            # Outward past the chosen end (away from A's body); into_a toward body.
+            if end_a == :right
+              # local 0: body = +xa, outward = −xa
+              outward = Geom::Vector3d.new(-xa.x, -xa.y, 0)
+              into_a = Geom::Vector3d.new(xa.x, xa.y, 0)
+            else
+              # local width: body = −xa, outward = +xa
+              outward = Geom::Vector3d.new(xa.x, xa.y, 0)
+              into_a = Geom::Vector3d.new(-xa.x, -xa.y, 0)
+            end
+
+            # Outer-corner pocket past A's end, SAME Y span as posts.
             join_centre = Geom::Point3d.new(
-              tip.x - xa.x * half.mm,
-              tip.y - xa.y * half.mm,
+              tip.x + outward.x * half.mm,
+              tip.y + outward.y * half.mm,
               z
             )
 
-            # B runs along +ya (front / inside of L). Graphic faces +xa (toward A /
-            # into the corner). Handedness is LH so purple stays on the inside.
-            xb = Geom::Vector3d.new(ya.x, ya.y, 0)
-            yb = Geom::Vector3d.new(xa.x, xa.y, 0)
+            # Infer L flip from where B currently sits relative to A's tip (±ya).
+            # Both flips keep purple on the concave/inside of the L.
+            mid_b = wall_b.transformation.origin
+            to_b = Geom::Vector3d.new(mid_b.x - tip.x, mid_b.y - tip.y, 0)
+            turn_plus = (to_b.x * ya.x + to_b.y * ya.y) >= 0.0
+
+            if turn_plus
+              along = Geom::Vector3d.new(ya.x, ya.y, 0)
+            else
+              along = Geom::Vector3d.new(-ya.x, -ya.y, 0)
+            end
+            # B graphic faces into A's body (inside corner).
+            yb = Geom::Vector3d.new(into_a.x, into_a.y, 0)
+            xb = Geom::Vector3d.new(along.x, along.y, 0)
             zb = Geom::Vector3d.new(0, 0, 1)
             begin
               xb.length = 1.0
               yb.length = 1.0
+              along.length = 1.0
             rescue StandardError
               xb = Geom::Vector3d.new(0, -1, 0)
               yb = Geom::Vector3d.new(-1, 0, 0)
+              along = xb.clone
             end
 
-            # B's local-0 outer face flushes with join's +ya face (inner vertex side).
+            # Face of join toward B (inner-vertex side along ±ya).
             join_b_face = Geom::Point3d.new(
-              join_centre.x + ya.x * half.mm,
-              join_centre.y + ya.y * half.mm,
+              join_centre.x + along.x * half.mm,
+              join_centre.y + along.y * half.mm,
               z
             )
-            # origin at connecting tip → B body extends +xb away from join.
-            origin_b = join_b_face
+
+            # Mate chosen end of B at join_b_face; body extends along +xb from that end.
+            if end_b == :right
+              # local 0 at join
+              origin_b = join_b_face
+            else
+              # local width at join → origin = face − xb * width
+              origin_b = Geom::Point3d.new(
+                join_b_face.x - xb.x * wb.mm,
+                join_b_face.y - xb.y * wb.mm,
+                z
+              )
+            end
             wall_b.transformation = Geom::Transformation.new(xb, yb, zb, origin_b)
             Constraints.snap_floor_sitting_to_floor!(wall_b)
 

@@ -15,6 +15,7 @@
 # v0.1.89: Frame Size grows right; Fabric Join 90° + join post.
 # v0.1.90: Join pocket flush (no ~18.5mm overlap).
 # v0.1.91: Outer-corner join per plan; starter packs viewer-left.
+# v0.1.92: Join chooses left/right mating ends (L flips either way).
 
 module ISOframe
   module StandDesigner
@@ -39,7 +40,7 @@ module ISOframe
       def build_dialog
         dlg = UI::HtmlDialog.new(
           dialog_title: 'ISOframe Stand Designer',
-          preferences_key: 'ISOframeStandDesignerDialog_v0191',
+          preferences_key: 'ISOframeStandDesignerDialog_v0192',
           scrollable: true,
           resizable: true,
           width: 300,
