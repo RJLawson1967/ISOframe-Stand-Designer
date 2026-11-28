@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Procedural Fabric wall (v0.1.84) — 37mm Al frame fully covered by fabric.
-# Posts + top rail + bottom rear rail; all local Z ≥ 0. No Wave flex / Geometry.
+# Procedural Fabric wall (v0.1.85) — 37mm Al frame fully covered by fabric.
+# Width is outer-to-outer. Posts + top/bottom rails coplanar; all local Z ≥ 0.
 
 module ISOframe
   module StandDesigner
@@ -88,33 +88,52 @@ module ISOframe
             defn
           end
 
+          # Post centres (mm) so overall outer-to-outer == width (not width+37).
+          # Ends inset by HALF_POST; intermediate joints on segment boundaries.
+          def post_centres_mm(width_mm)
+            width = snap_width_mm(width_mm)
+            segs = decompose_width_mm(width)
+            half = C::HALF_POST_MM
+            edges = [0.0]
+            segs.each { |s| edges << (edges.last + s) }
+            centres = []
+            edges.each_with_index do |e, i|
+              if i.zero?
+                centres << half
+              elsif i == edges.size - 1
+                centres << (width - half)
+              else
+                centres << e
+              end
+            end
+            centres
+          end
+
           def rebuild!(defn, width_mm, height_key)
             defn.entities.clear! if defn.entities.size > 0
             width = snap_width_mm(width_mm)
             hkey = height_key.to_s
-            segs = decompose_width_mm(width)
             tip = post_tip_mm(hkey)
             g_h = height_mm(hkey)
             z_bot = C::GRAPHIC_Z_BOT_MM.mm
             z_top = g_h.mm
 
-            xs = [0.0]
-            segs.each { |s| xs << (xs.last + s) }
-
+            centres = post_centres_mm(width)
             # Vertical Al posts — soles at local Z=0 (floorspace top).
-            xs.each_with_index do |x_mm, i|
+            centres.each_with_index do |x_mm, i|
               add_post!(defn.entities, x_mm.mm, tip, "#{C::GROUP_POST}_#{i}")
             end
-            # Top + bottom-rear 37 mm Al rails — closed frame under the fabric.
-            add_top_rail!(defn.entities, xs.first.mm, xs.last.mm, tip, C::GROUP_RAIL_TOP)
-            add_bottom_rear_rail!(defn.entities, xs.first.mm, xs.last.mm, C::GROUP_RAIL_BOT)
+            # Top + bottom 37 mm Al rails — same vertical plane as posts (Y).
+            x_left = centres.first
+            x_right = centres.last
+            add_top_rail!(defn.entities, x_left.mm, x_right.mm, tip, C::GROUP_RAIL_TOP)
+            add_bottom_rail!(defn.entities, x_left.mm, x_right.mm, C::GROUP_RAIL_BOT)
 
-            # One fabric sheet covering the full Al frame (posts + rails), Z≥0.
-            half = C::HALF_POST_MM.mm
+            # Fabric covers full outer-to-outer frame (0 … width), Z≥0.
             add_graphic_panel!(
               defn.entities,
-              xs.first.mm - half,
-              xs.last.mm + half,
+              0.0,
+              width.mm,
               z_bot,
               z_top,
               C::GROUP_GRAPHIC
@@ -135,32 +154,30 @@ module ISOframe
             )
           end
 
-          def add_top_rail!(ents, x0, x1, tip_mm, name)
+          def add_top_rail!(ents, x_c0, x_c1, tip_mm, name)
             half = C::HALF_POST_MM.mm
             tip = tip_mm.mm
             rail = C::POST_MM.mm
             z0 = tip - rail
             z0 = 0 if z0 < 0
+            # Span outer faces of end posts; Y matches posts.
             add_box!(
               ents,
-              Geom::Point3d.new(x0 - half, -half, z0),
-              Geom::Point3d.new(x1 + half, half, tip),
+              Geom::Point3d.new(x_c0 - half, -half, z0),
+              Geom::Point3d.new(x_c1 + half, half, tip),
               Sketchup::Color.new(*C::POST_RGB),
               name
             )
           end
 
-          # 37 mm square Al at bottom rear (behind post rear face), soles on floor.
-          def add_bottom_rear_rail!(ents, x0, x1, name)
+          # 37 mm square Al at bottom — same Y plane as posts + top rail.
+          def add_bottom_rail!(ents, x_c0, x_c1, name)
             half = C::HALF_POST_MM.mm
             rail = C::POST_MM.mm
-            # Rear of posts is local −Y; rail sits flush behind that face.
-            y1 = -half
-            y0 = y1 - rail
             add_box!(
               ents,
-              Geom::Point3d.new(x0 - half, y0, 0),
-              Geom::Point3d.new(x1 + half, y1, rail),
+              Geom::Point3d.new(x_c0 - half, -half, 0),
+              Geom::Point3d.new(x_c1 + half, half, rail),
               Sketchup::Color.new(*C::POST_RGB),
               name
             )
