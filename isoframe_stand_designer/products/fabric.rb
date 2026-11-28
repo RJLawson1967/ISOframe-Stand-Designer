@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-# Fabric product (v0.1.84) — place Midi starter + Frame Size dialog.
+# Fabric product (v0.1.86) — place Midi starter + Frame Size dialog.
 # Fabric covers entire Al frame; all geometry above floorspace top.
 # Firewall: no Wave flex / Geometry rebuild. Floorspace is shared UI only.
 

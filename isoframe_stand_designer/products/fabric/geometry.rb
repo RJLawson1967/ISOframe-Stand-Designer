@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Procedural Fabric wall (v0.1.85) — 37mm Al frame fully covered by fabric.
-# Width is outer-to-outer. Posts + top/bottom rails coplanar; all local Z ≥ 0.
+# Procedural Fabric wall (v0.1.86) — 37mm Al frame + 12.5mm round braces, fabric cover.
+# Width is outer-to-outer (edge-to-edge). Place always rebuilds so cache cannot stick.
 
 module ISOframe
   module StandDesigner
@@ -74,22 +74,39 @@ module ISOframe
             "#{C::DEFN_PREFIX} #{height_key} w#{width_mm.round}"
           end
 
+          # Always rebuild — Frame Size make_unique can leave a def named w900
+          # with a wider body; Place must never reuse that stale geometry.
           def definition_for!(model, width_mm, height_key)
             width = snap_width_mm(width_mm)
             hkey = height_key.to_s
             hkey = C::DEFAULT_HEIGHT unless C::HEIGHTS_MM.key?(hkey)
             name = definition_name(width, hkey)
-            existing = model.definitions[name]
-            if existing && !existing.image? && existing.entities.size > 0
-              return existing
+            defn = model.definitions[name]
+            if defn.nil? || defn.image?
+              defn = model.definitions.add(name)
             end
-            defn = existing || model.definitions.add(name)
             rebuild!(defn, width, hkey)
+            ensure_definition_name!(defn, width, hkey)
             defn
           end
 
-          # Post centres (mm) so overall outer-to-outer == width (not width+37).
-          # Ends inset by HALF_POST; intermediate joints on segment boundaries.
+          def ensure_definition_name!(defn, width_mm, height_key)
+            return unless defn && defn.valid?
+            want = definition_name(snap_width_mm(width_mm), height_key)
+            defn.name = want if defn.name.to_s != want
+          rescue StandardError => e
+            puts "[ISOframe][Fabric] rename def failed: #{e.message}"
+          end
+
+          # Drop unused Fabric defs so a deleted resized wall cannot poison Place.
+          def purge_unused_fabric_defs!(model)
+            return unless model
+            model.definitions.purge_unused
+          rescue StandardError => e
+            puts "[ISOframe][Fabric] purge_unused failed: #{e.message}"
+          end
+
+          # Post centres (mm): outer faces at 0 and width (true edge-to-edge).
           def post_centres_mm(width_mm)
             width = snap_width_mm(width_mm)
             segs = decompose_width_mm(width)
@@ -109,10 +126,15 @@ module ISOframe
             centres
           end
 
+          def brace_z_list(height_key)
+            C::BRACE_Z_MM[height_key.to_s] || C::BRACE_Z_MM[C::DEFAULT_HEIGHT]
+          end
+
           def rebuild!(defn, width_mm, height_key)
             defn.entities.clear! if defn.entities.size > 0
             width = snap_width_mm(width_mm)
             hkey = height_key.to_s
+            hkey = C::DEFAULT_HEIGHT unless C::HEIGHTS_MM.key?(hkey)
             tip = post_tip_mm(hkey)
             g_h = height_mm(hkey)
             z_bot = C::GRAPHIC_Z_BOT_MM.mm
@@ -123,11 +145,27 @@ module ISOframe
             centres.each_with_index do |x_mm, i|
               add_post!(defn.entities, x_mm.mm, tip, "#{C::GROUP_POST}_#{i}")
             end
-            # Top + bottom 37 mm Al rails — same vertical plane as posts (Y).
             x_left = centres.first
             x_right = centres.last
             add_top_rail!(defn.entities, x_left.mm, x_right.mm, tip, C::GROUP_RAIL_TOP)
             add_bottom_rail!(defn.entities, x_left.mm, x_right.mm, C::GROUP_RAIL_BOT)
+
+            # Round braces between consecutive posts (length = centre span = bay−37).
+            zs = brace_z_list(hkey)
+            (0...(centres.size - 1)).each do |i|
+              x0 = centres[i]
+              x1 = centres[i + 1]
+              zs.each_with_index do |z_mm, zi|
+                next if z_mm >= tip
+                add_brace!(
+                  defn.entities,
+                  x0.mm,
+                  x1.mm,
+                  z_mm,
+                  "#{C::GROUP_BRACE}_#{i}_#{zi}"
+                )
+              end
+            end
 
             # Fabric covers full outer-to-outer frame (0 … width), Z≥0.
             add_graphic_panel!(
@@ -138,13 +176,13 @@ module ISOframe
               z_top,
               C::GROUP_GRAPHIC
             )
+            ensure_definition_name!(defn, width, hkey)
             defn
           end
 
           def add_post!(ents, x, tip_mm, name)
             half = C::HALF_POST_MM.mm
             tip = tip_mm.mm
-            # Explicit box — avoid face-extrude (can go below Z=0).
             add_box!(
               ents,
               Geom::Point3d.new(x - half, -half, 0),
@@ -160,7 +198,6 @@ module ISOframe
             rail = C::POST_MM.mm
             z0 = tip - rail
             z0 = 0 if z0 < 0
-            # Span outer faces of end posts; Y matches posts.
             add_box!(
               ents,
               Geom::Point3d.new(x_c0 - half, -half, z0),
@@ -170,7 +207,6 @@ module ISOframe
             )
           end
 
-          # 37 mm square Al at bottom — same Y plane as posts + top rail.
           def add_bottom_rail!(ents, x_c0, x_c1, name)
             half = C::HALF_POST_MM.mm
             rail = C::POST_MM.mm
@@ -183,9 +219,44 @@ module ISOframe
             )
           end
 
+          # 12.5 mm round Al brace along +X at Z=z_mm, Y=0 (post plane centre).
+          # Length = x1 − x0 (= module/bay width − 37 mm between end-post centres).
+          def add_brace!(ents, x0, x1, z_mm, name)
+            return if x1 <= x0
+            r = (C::BRACE_DIAMETER_MM / 2.0).mm
+            z = z_mm.to_f.mm
+            y = 0.0
+            n = C::BRACE_SEGMENTS
+            ring0 = []
+            ring1 = []
+            n.times do |i|
+              ang = (2.0 * Math::PI * i) / n
+              dy = r * Math.cos(ang)
+              dz = r * Math.sin(ang)
+              ring0 << Geom::Point3d.new(x0, y + dy, z + dz)
+              ring1 << Geom::Point3d.new(x1, y + dy, z + dz)
+            end
+            group = ents.add_group
+            group.name = name
+            color = Sketchup::Color.new(*C::BRACE_RGB)
+            group.entities.add_face(ring0)
+            group.entities.add_face(ring1.reverse)
+            n.times do |i|
+              j = (i + 1) % n
+              group.entities.add_face(ring0[i], ring0[j], ring1[j], ring1[i])
+            end
+            group.entities.grep(Sketchup::Face).each do |f|
+              f.material = color
+              f.back_material = color
+            end
+            group
+          rescue StandardError => e
+            puts "[ISOframe][Fabric] add_brace! failed: #{e.message}"
+            nil
+          end
+
           def add_graphic_panel!(ents, x0, x1, z_bot, z_top, name)
             return if x1 <= x0 || z_top <= z_bot
-            # Front of posts (+Y), thickness into the room (+Y).
             y0 = C::HALF_POST_MM.mm + C::GRAPHIC_FRONT_CLEARANCE_MM.mm
             y1 = y0 + C::GRAPHIC_THICKNESS_MM.mm
             add_box!(
@@ -199,13 +270,11 @@ module ISOframe
             puts "[ISOframe][Fabric] add_graphic_panel! failed: #{e.message}"
           end
 
-          # Axis-aligned box with all faces; guarantees min Z is pmin.z (no extrude flip).
           def add_box!(ents, pmin, pmax, color, name)
             group = ents.add_group
             group.name = name
             x0, y0, z0 = pmin.x, pmin.y, pmin.z
             x1, y1, z1 = pmax.x, pmax.y, pmax.z
-            # Clamp: never build below local Z=0 (floorspace top).
             z0 = 0 if z0 < 0
             z1 = 0 if z1 < 0
             return group if z1 <= z0

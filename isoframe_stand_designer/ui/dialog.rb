@@ -10,6 +10,7 @@
 # v0.1.83: Fabric graphic covers entire Al frame; all Z ≥ floorspace top.
 # v0.1.84: Fabric Frame Size dialog (replaces Edge Snap); bottom rear Al rail.
 # v0.1.85: Fabric outer-to-outer width; bottom rail coplanar with posts/top.
+# v0.1.86: braces; Place always 900×Midi (no stale resized def).
 
 module ISOframe
   module StandDesigner

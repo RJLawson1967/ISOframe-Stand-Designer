@@ -61,9 +61,12 @@ module ISOframe
             model = Sketchup.active_model
             model.start_operation('Place Fabric Midi Starter', true)
             begin
+              # Always 900 × Midi — never inherit a previously resized definition.
               width = Fabric::Constants::STARTER_WIDTH_MM
               height = Fabric::Constants::DEFAULT_HEIGHT
+              Fabric::Geometry.purge_unused_fabric_defs!(model)
               defn = Fabric::Geometry.definition_for!(model, width, height)
+              # definition_for! always rebuilds; attrs forced to starter defaults.
               origin = Geom::Point3d.new(point.x, point.y, Floorspace.module_base_z(model))
               tr = Fabric::Geometry.placement_transform(origin)
               inst = model.active_entities.add_instance(defn, tr)
@@ -74,7 +77,7 @@ module ISOframe
               model.selection.clear
               model.selection.add(inst)
               Sketchup.status_text =
-                'Fabric Midi placed — select it, then Frame Size to set height/width.'
+                'Fabric Midi 900×2270 placed — select it, then Frame Size to set height/width.'
               model.commit_operation
             rescue StandardError => e
               model.abort_operation

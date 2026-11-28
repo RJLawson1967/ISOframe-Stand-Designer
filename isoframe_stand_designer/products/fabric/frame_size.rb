@@ -61,6 +61,8 @@ module ISOframe
             begin
               wall.make_unique if wall.respond_to?(:make_unique)
               Fabric::Geometry.rebuild!(wall.definition, width, height)
+              # Rename so a resized body is never still called "… w900".
+              Fabric::Geometry.ensure_definition_name!(wall.definition, width, height)
               Attributes.set(wall, ::ISOframe::StandDesigner::Constants::KEY_HEIGHT, height)
               Attributes.set(
                 wall,
