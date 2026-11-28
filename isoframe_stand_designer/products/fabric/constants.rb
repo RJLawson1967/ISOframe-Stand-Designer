@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Fabric product sizes (v0.1.85). Isolated from Wave Constants::HEIGHTS_MM / bay.
-# Width is outer-to-outer. Fabric covers entire Al frame; all Z ≥ floorspace top.
+# Fabric product sizes (v0.1.86). Isolated from Wave Constants::HEIGHTS_MM / bay.
+# Width is outer-to-outer (edge-to-edge). Fabric covers entire Al frame; Z ≥ floor top.
 
 module ISOframe
   module StandDesigner
@@ -17,6 +17,17 @@ module ISOframe
           # Fabric overhangs the post tip slightly (same idea as Wave).
           GRAPHIC_TOP_ABOVE_POST_MM = 5.0
 
+          # Round Al bracing between posts (diameter mm). Length = bay outer − POST.
+          BRACE_DIAMETER_MM = 12.5
+          BRACE_SEGMENTS = 20
+          # Brace centre-line Z (mm AFF / local) by height class.
+          BRACE_Z_MM = {
+            'midi' => [950.0, 1400.0].freeze,
+            'maxi' => [950.0, 1600.0].freeze,
+            'super_maxi' => [950.0, 1600.0, 2200.0].freeze,
+            'ultra_maxi' => [950.0, 1600.0, 3000.0].freeze
+          }.freeze
+
           STARTER_WIDTH_MM = 900.0
           WIDTH_STEP_MM = 250.0
           # Compose remainder after starter (largest first).
@@ -29,18 +40,19 @@ module ISOframe
             'ultra_maxi' => 3470.0
           }.freeze
           DEFAULT_HEIGHT = 'midi'
-          # Snap order retained for any height helpers.
           HEIGHT_SNAP_ORDER = %w[midi maxi super_maxi ultra_maxi].freeze
 
-          DEFN_PREFIX = 'ISOframe Fabric Wall v85'
+          DEFN_PREFIX = 'ISOframe Fabric Wall v86'
           INSTANCE_NAME = 'ISOframe Fabric Wall'
           GROUP_POST = 'FabricPost'
           GROUP_GRAPHIC = 'FabricGraphic'
           GROUP_RAIL_TOP = 'FabricRailTop'
           GROUP_RAIL_BOT = 'FabricRailBot'
+          GROUP_BRACE = 'FabricBrace'
 
           POST_RGB = [170, 176, 182].freeze
           GRAPHIC_RGB = [210, 220, 235].freeze
+          BRACE_RGB = [160, 166, 172].freeze
         end
       end
     end
