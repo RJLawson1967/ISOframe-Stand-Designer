@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Fabric product sizes (v0.1.84). Isolated from Wave Constants::HEIGHTS_MM / bay.
-# Fabric covers the entire Al frame; all geometry sits on/above floorspace top.
+# Fabric product sizes (v0.1.85). Isolated from Wave Constants::HEIGHTS_MM / bay.
+# Width is outer-to-outer. Fabric covers entire Al frame; all Z ≥ floorspace top.
 
 module ISOframe
   module StandDesigner
@@ -32,7 +32,7 @@ module ISOframe
           # Snap order retained for any height helpers.
           HEIGHT_SNAP_ORDER = %w[midi maxi super_maxi ultra_maxi].freeze
 
-          DEFN_PREFIX = 'ISOframe Fabric Wall v84'
+          DEFN_PREFIX = 'ISOframe Fabric Wall v85'
           INSTANCE_NAME = 'ISOframe Fabric Wall'
           GROUP_POST = 'FabricPost'
           GROUP_GRAPHIC = 'FabricGraphic'
