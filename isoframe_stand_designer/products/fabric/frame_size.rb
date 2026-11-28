@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Fabric Frame Size dialog (v0.1.84) — select Fabric wall → set height + width.
-# Height dropdown; width snaps every 250 mm (900 starter + 1000/750/500/250).
+# Fabric Frame Size dialog (v0.1.89) — select Fabric wall → set height + width.
+# Widen grows to graphic-front RIGHT; starter (viewer-left) stays anchored.
 
 module ISOframe
   module StandDesigner
@@ -56,6 +56,7 @@ module ISOframe
             height = C::DEFAULT_HEIGHT unless C::HEIGHTS_MM.key?(height)
             width = Fabric::Geometry.snap_width_mm(width_mm)
             model = wall.model
+            old_width = Fabric::Geometry.wall_local_width_mm(wall)
 
             model.start_operation('Fabric Frame Size', true)
             begin
@@ -79,6 +80,8 @@ module ISOframe
                 ::ISOframe::StandDesigner::Constants::KEY_TYPE,
                 ::ISOframe::StandDesigner::Constants::TYPE_FABRIC_WALL
               )
+              # Extensions add to the RIGHT (front view); starter stays left-anchored.
+              Fabric::Geometry.shift_for_widen_right!(wall, old_width, width)
               Constraints.mark_floor_slide!(wall)
               Constraints.snap_floor_sitting_to_floor!(wall)
               model.selection.clear
@@ -86,7 +89,7 @@ module ISOframe
               segs = Fabric::Geometry.decompose_width_mm(width)
               Sketchup.status_text =
                 "Fabric Frame Size → #{label_for_height(height)} × #{width.to_i} mm " \
-                "[#{segs.map(&:to_i).join('+')}]"
+                "[#{segs.map(&:to_i).join('+')}] (grows right)"
               model.commit_operation
               true
             rescue StandardError => e

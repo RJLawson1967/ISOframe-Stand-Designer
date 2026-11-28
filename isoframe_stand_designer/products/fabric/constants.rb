@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Fabric product sizes (v0.1.88). Isolated from Wave Constants::HEIGHTS_MM / bay.
-# Width is outer-to-outer (edge-to-edge). Fabric covers entire Al frame; Z ≥ floor top.
+# Fabric product sizes (v0.1.89). Isolated from Wave Constants::HEIGHTS_MM / bay.
+# Width is outer-to-outer. Widen grows viewer-right; optional 90° join post.
 
 module ISOframe
   module StandDesigner
@@ -43,8 +43,10 @@ module ISOframe
           DEFAULT_HEIGHT = 'midi'
           HEIGHT_SNAP_ORDER = %w[midi maxi super_maxi ultra_maxi].freeze
 
-          DEFN_PREFIX = 'ISOframe Fabric Wall v88'
+          DEFN_PREFIX = 'ISOframe Fabric Wall v89'
+          JOIN_DEFN_PREFIX = 'ISOframe Fabric Join Post v89'
           INSTANCE_NAME = 'ISOframe Fabric Wall'
+          JOIN_INSTANCE_NAME = 'ISOframe Fabric Join'
           GROUP_POST = 'FabricPost'
           GROUP_GRAPHIC = 'FabricGraphic'
           GROUP_RAIL_TOP = 'FabricRailTop'
