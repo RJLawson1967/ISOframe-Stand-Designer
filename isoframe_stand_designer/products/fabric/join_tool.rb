@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Fabric Join (v0.1.89) — click two walls; snap at 90° with optional 37mm join post.
-# Join post height = lowest of the two walls. Sold as option; click into place.
+# Fabric Join (v0.1.92) — click near the mating end of each wall (left or right).
+# Snap at 90° with 37mm outer-corner join post. L flips by chosen ends + B side.
 
 module ISOframe
   module StandDesigner
@@ -9,8 +9,11 @@ module ISOframe
         class JoinTool
           def activate
             @ip = Sketchup::InputPoint.new
-            @wall_a = selected_fabric_wall
+            @wall_a = nil
+            @end_a = nil
             @wall_b = nil
+            @end_b = nil
+            @hover_end = nil
             update_status
           end
 
@@ -25,13 +28,22 @@ module ISOframe
 
           def onCancel(_reason, view)
             @wall_a = nil
+            @end_a = nil
             @wall_b = nil
+            @end_b = nil
+            @hover_end = nil
             update_status
             view.invalidate
           end
 
           def onMouseMove(_flags, x, y, view)
             @ip.pick(view, x, y)
+            wall = pick_fabric_wall(view, x, y)
+            @hover_wall = wall
+            @hover_end = if wall && wall.valid? && @ip.valid?
+                           Fabric::Geometry.nearest_end_at_point(wall, @ip.position)
+                         end
+            update_status
             view.invalidate
           end
 
@@ -39,28 +51,37 @@ module ISOframe
             @ip.pick(view, x, y)
             wall = pick_fabric_wall(view, x, y) || selected_fabric_wall
             unless wall && wall.valid?
-              UI.messagebox('Fabric Join: click a Fabric wall.')
+              UI.messagebox('Fabric Join: click near the left or right end of a Fabric wall.')
               return
             end
+            point = @ip.valid? ? @ip.position : wall.transformation.origin
+            which = Fabric::Geometry.nearest_end_at_point(wall, point)
+
             if @wall_a.nil? || !@wall_a.valid?
               @wall_a = wall
+              @end_a = which
               update_status
               view.invalidate
               return
             end
             if wall.entityID == @wall_a.entityID
-              UI.messagebox('Fabric Join: click a second, different Fabric wall.')
+              # Re-pick end on the same wall.
+              @end_a = which
+              update_status
+              view.invalidate
               return
             end
             @wall_b = wall
+            @end_b = which
             finish_join!
             view.invalidate
           end
 
           def draw(view)
-            if @wall_a && @wall_a.valid?
-              tip = Fabric::Geometry.viewer_right_tip_world(@wall_a)
-              view.draw_points([tip], 12, 2, 'orange')
+            draw_wall_ends(view, @wall_a, @end_a, true) if @wall_a && @wall_a.valid?
+            if @hover_wall && @hover_wall.valid? &&
+               (@wall_a.nil? || @hover_wall.entityID != @wall_a.entityID)
+              draw_wall_ends(view, @hover_wall, @hover_end, false)
             end
             return unless @ip && @ip.valid?
             view.draw_points([@ip.position], 8, 2, 'red')
@@ -69,21 +90,38 @@ module ISOframe
           def getExtents
             bb = Geom::BoundingBox.new
             bb.add(@ip.position) if @ip && @ip.valid?
-            if @wall_a && @wall_a.valid?
-              bb.add(Fabric::Geometry.viewer_right_tip_world(@wall_a))
-            end
+            add_wall_tips_to_bb!(bb, @wall_a)
+            add_wall_tips_to_bb!(bb, @hover_wall)
             bb
           end
 
           private
 
+          def draw_wall_ends(view, wall, selected_end, is_anchor)
+            left = Fabric::Geometry.viewer_left_tip_world(wall)
+            right = Fabric::Geometry.viewer_right_tip_world(wall)
+            # Dim both tips; highlight the chosen/hovered mating end.
+            view.draw_points([left], 10, 2, selected_end == :left ? 'orange' : 'cyan')
+            view.draw_points([right], 10, 2, selected_end == :right ? 'orange' : 'cyan')
+            return unless is_anchor && selected_end
+            tip = selected_end == :left ? left : right
+            view.draw_points([tip], 14, 2, 'orange')
+          end
+
+          def add_wall_tips_to_bb!(bb, wall)
+            return unless wall && wall.valid?
+            bb.add(Fabric::Geometry.viewer_left_tip_world(wall))
+            bb.add(Fabric::Geometry.viewer_right_tip_world(wall))
+          end
+
           def update_status
             if @wall_a && @wall_a.valid?
+              side = @end_a == :left ? 'LEFT' : 'RIGHT'
               Sketchup.status_text =
-                'Fabric Join: click the second wall to snap at 90° (37 mm join post). Esc cancels.'
+                "Fabric Join: wall A #{side} end locked — click near LEFT or RIGHT end of second wall. Esc cancels."
             else
               Sketchup.status_text =
-                'Fabric Join: click the first Fabric wall (anchor). Second wall snaps at 90° on its right.'
+                'Fabric Join: click near the LEFT or RIGHT end of the first Fabric wall (anchor).'
             end
           end
 
@@ -91,7 +129,9 @@ module ISOframe
             model = Sketchup.active_model
             model.start_operation('Fabric Join 90°', true)
             begin
-              join = Fabric::Geometry.join_walls_at_right_angle!(@wall_a, @wall_b)
+              join = Fabric::Geometry.join_walls_at_right_angle!(
+                @wall_a, @wall_b, end_a: @end_a, end_b: @end_b
+              )
               unless join
                 model.abort_operation
                 UI.messagebox('Fabric Join failed.')
@@ -101,9 +141,15 @@ module ISOframe
               model.selection.add(@wall_a)
               model.selection.add(@wall_b)
               model.selection.add(join)
+              a_side = @end_a == :left ? 'left' : 'right'
+              b_side = @end_b == :left ? 'left' : 'right'
               Sketchup.status_text =
-                'Fabric Join: walls snapped at 90° with 37 mm join post (height = shortest wall).'
+                "Fabric Join: #{a_side}↔#{b_side} ends at 90° with 37 mm outer-corner post."
               model.commit_operation
+              @wall_a = nil
+              @end_a = nil
+              @wall_b = nil
+              @end_b = nil
               Sketchup.active_model.select_tool(nil)
             rescue StandardError => e
               model.abort_operation
