@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Fabric Frame Size dialog (v0.1.89) — select Fabric wall → set height + width.
-# Widen grows to graphic-front RIGHT; starter (viewer-left) stays anchored.
+# Fabric Frame Size dialog (v0.1.91) — select Fabric wall → set height + width.
+# Starter packs viewer-LEFT; widen grows graphic-front RIGHT.
 
 module ISOframe
   module StandDesigner
