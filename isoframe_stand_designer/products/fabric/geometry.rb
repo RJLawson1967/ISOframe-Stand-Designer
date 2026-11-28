@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Procedural Fabric wall (v0.1.92) — 37mm Al frame + 12.5mm round braces, fabric cover.
-# Starter packs viewer-LEFT; Join picks left/right ends so the L can flip either way.
+# Procedural Fabric wall (v0.1.93) — 37mm Al frame + 12.5mm round braces, fabric cover.
+# Join: left/right end selection; never mirror/reflect either wall (RH only).
 
 module ISOframe
   module StandDesigner
@@ -154,9 +154,44 @@ module ISOframe
             defn
           end
 
+          # True when the 3×3 of (xaxis,yaxis,zaxis) is right-handed (det > 0).
+          def right_handed_axes?(xaxis, yaxis, zaxis)
+            # det = x · (y × z) with column axes — use x · (y × z) wait: det[x y z] = x·(y×z)
+            # We want det[x y z] > 0 i.e. x · (y × z) > 0, equiv. z · (x × y) > 0.
+            cross = Geom::Vector3d.new(
+              xaxis.y * yaxis.z - xaxis.z * yaxis.y,
+              xaxis.z * yaxis.x - xaxis.x * yaxis.z,
+              xaxis.x * yaxis.y - xaxis.y * yaxis.x
+            )
+            (cross.x * zaxis.x + cross.y * zaxis.y + cross.z * zaxis.z) > 0.0
+          end
+
+          # RH axes for a wall run along +xb (plan); graphic = Z × xb. Never mirrors.
+          def rh_wall_axes_along(along_vec)
+            xb = Geom::Vector3d.new(along_vec.x, along_vec.y, 0)
+            zb = Geom::Vector3d.new(0, 0, 1)
+            begin
+              xb.length = 1.0
+            rescue StandardError
+              xb = Geom::Vector3d.new(0, -1, 0)
+            end
+            # Y = Z × X  → right-handed, det = +1, no reflection.
+            yb = Geom::Vector3d.new(
+              zb.y * xb.z - zb.z * xb.y,
+              zb.z * xb.x - zb.x * xb.z,
+              zb.x * xb.y - zb.y * xb.x
+            )
+            begin
+              yb.length = 1.0
+            rescue StandardError
+              yb = Geom::Vector3d.new(-1, 0, 0)
+            end
+            [xb, yb, zb]
+          end
+
           # Snap wall_b to wall_a at 90° with a 37mm join post in the OUTER corner pocket.
-          # end_a / end_b = :left | :right (viewer ends that mate). Choosing ends flips the L.
-          # Plan: red post outer corner; blue Al butts post; purple graphics INSIDE.
+          # end_a / end_b = :left | :right (viewer ends that mate). L flips via end choice only.
+          # NEVER mirror/reflect either wall — B always gets a right-handed transform.
           def join_walls_at_right_angle!(wall_a, wall_b, end_a: :right, end_b: :right)
             return false unless wall_a && wall_a.valid? && wall_b && wall_b.valid?
             return false if wall_a.entityID == wall_b.entityID
@@ -183,15 +218,11 @@ module ISOframe
               ya = Geom::Vector3d.new(0, -1, 0)
             end
 
-            # Outward past the chosen end (away from A's body); into_a toward body.
+            # Outward past the chosen end (away from A's body).
             if end_a == :right
-              # local 0: body = +xa, outward = −xa
               outward = Geom::Vector3d.new(-xa.x, -xa.y, 0)
-              into_a = Geom::Vector3d.new(xa.x, xa.y, 0)
             else
-              # local width: body = −xa, outward = +xa
               outward = Geom::Vector3d.new(xa.x, xa.y, 0)
-              into_a = Geom::Vector3d.new(-xa.x, -xa.y, 0)
             end
 
             # Outer-corner pocket past A's end, SAME Y span as posts.
@@ -201,44 +232,22 @@ module ISOframe
               z
             )
 
-            # Infer L flip from where B currently sits relative to A's tip (±ya).
-            # Both flips keep purple on the concave/inside of the L.
-            mid_b = wall_b.transformation.origin
-            to_b = Geom::Vector3d.new(mid_b.x - tip.x, mid_b.y - tip.y, 0)
-            turn_plus = (to_b.x * ya.x + to_b.y * ya.y) >= 0.0
+            # B runs along A's graphic front (+ya). RH axes only — never LH/mirror.
+            # (v0.1.92 set yb = into_a which made det < 0 and reflected the frame.)
+            xb, yb, zb = rh_wall_axes_along(ya)
+            return false unless right_handed_axes?(xb, yb, zb)
 
-            if turn_plus
-              along = Geom::Vector3d.new(ya.x, ya.y, 0)
-            else
-              along = Geom::Vector3d.new(-ya.x, -ya.y, 0)
-            end
-            # B graphic faces into A's body (inside corner).
-            yb = Geom::Vector3d.new(into_a.x, into_a.y, 0)
-            xb = Geom::Vector3d.new(along.x, along.y, 0)
-            zb = Geom::Vector3d.new(0, 0, 1)
-            begin
-              xb.length = 1.0
-              yb.length = 1.0
-              along.length = 1.0
-            rescue StandardError
-              xb = Geom::Vector3d.new(0, -1, 0)
-              yb = Geom::Vector3d.new(-1, 0, 0)
-              along = xb.clone
-            end
-
-            # Face of join toward B (inner-vertex side along ±ya).
+            # Face of join toward B (+xb / +ya).
             join_b_face = Geom::Point3d.new(
-              join_centre.x + along.x * half.mm,
-              join_centre.y + along.y * half.mm,
+              join_centre.x + xb.x * half.mm,
+              join_centre.y + xb.y * half.mm,
               z
             )
 
-            # Mate chosen end of B at join_b_face; body extends along +xb from that end.
+            # Mate chosen end of B; body extends along +xb. Wall A is never moved.
             if end_b == :right
-              # local 0 at join
               origin_b = join_b_face
             else
-              # local width at join → origin = face − xb * width
               origin_b = Geom::Point3d.new(
                 join_b_face.x - xb.x * wb.mm,
                 join_b_face.y - xb.y * wb.mm,
