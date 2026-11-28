@@ -8,6 +8,7 @@
 # Wave actions go through Products::Wave facade only.
 # v0.1.82: Floorspace shared above tabs; Fabric place + edge-snap callbacks.
 # v0.1.83: Fabric graphic covers entire Al frame; all Z ≥ floorspace top.
+# v0.1.84: Fabric Frame Size dialog (replaces Edge Snap); bottom rear Al rail.
 
 module ISOframe
   module StandDesigner
@@ -32,7 +33,7 @@ module ISOframe
       def build_dialog
         dlg = UI::HtmlDialog.new(
           dialog_title: 'ISOframe Stand Designer',
-          preferences_key: 'ISOframeStandDesignerDialog_v0183',
+          preferences_key: 'ISOframeStandDesignerDialog_v0184',
           scrollable: true,
           resizable: true,
           width: 300,
@@ -78,9 +79,9 @@ module ISOframe
         bind.call('run_screen_small') { Products::Wave.run_screen_small! }
         bind.call('run_screen_large') { Products::Wave.run_screen_large! }
 
-        # Fabric tab — Products::Fabric only (no Wave flex).
+        # Fabric tab — Products::Fabric only (no Wave flex / no Edge Snap).
         bind.call('run_fabric_place') { Products::Fabric.run_place_midi! }
-        bind.call('run_fabric_edge_snap') { Products::Fabric.run_edge_snap! }
+        bind.call('run_fabric_frame_size') { Products::Fabric.run_frame_size! }
       end
     end
   end

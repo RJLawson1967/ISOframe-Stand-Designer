@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-# Fabric product sizes (v0.1.83). Isolated from Wave Constants::HEIGHTS_MM / bay.
+# Fabric product sizes (v0.1.84). Isolated from Wave Constants::HEIGHTS_MM / bay.
 # Fabric covers the entire Al frame; all geometry sits on/above floorspace top.
 
 module ISOframe
@@ -29,14 +29,15 @@ module ISOframe
             'ultra_maxi' => 3470.0
           }.freeze
           DEFAULT_HEIGHT = 'midi'
-          # Snap order for top-edge drag (short → tall).
+          # Snap order retained for any height helpers.
           HEIGHT_SNAP_ORDER = %w[midi maxi super_maxi ultra_maxi].freeze
 
-          DEFN_PREFIX = 'ISOframe Fabric Wall v83'
+          DEFN_PREFIX = 'ISOframe Fabric Wall v84'
           INSTANCE_NAME = 'ISOframe Fabric Wall'
           GROUP_POST = 'FabricPost'
           GROUP_GRAPHIC = 'FabricGraphic'
-          GROUP_RAIL = 'FabricRail'
+          GROUP_RAIL_TOP = 'FabricRailTop'
+          GROUP_RAIL_BOT = 'FabricRailBot'
 
           POST_RGB = [170, 176, 182].freeze
           GRAPHIC_RGB = [210, 220, 235].freeze

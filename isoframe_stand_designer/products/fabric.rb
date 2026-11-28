@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-# Fabric product (v0.1.83) — place Midi starter + edge-snap height/width.
+# Fabric product (v0.1.84) — place Midi starter + Frame Size dialog.
 # Fabric covers entire Al frame; all geometry above floorspace top.
 # Firewall: no Wave flex / Geometry rebuild. Floorspace is shared UI only.
 
@@ -29,10 +29,8 @@ module ISOframe
           true
         end
 
-        def run_edge_snap!
-          return unless License.require_active!
-          Sketchup.active_model.select_tool(EdgeSnapTool.new)
-          true
+        def run_frame_size!
+          FrameSize.prompt_selected!
         end
       end
     end

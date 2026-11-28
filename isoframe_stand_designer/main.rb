@@ -35,7 +35,7 @@ module ISOframe
         products/fabric/constants
         products/fabric/geometry
         products/fabric/place_tool
-        products/fabric/edge_snap_tool
+        products/fabric/frame_size
         products/fabric
         products/lumen
         products/ripple
