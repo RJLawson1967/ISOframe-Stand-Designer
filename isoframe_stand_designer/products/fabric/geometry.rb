@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Procedural Fabric wall (v0.1.89) — 37mm Al frame + 12.5mm round braces, fabric cover.
-# Width outer-to-outer; widen grows graphic-front RIGHT; optional join post.
+# Procedural Fabric wall (v0.1.90) — 37mm Al frame + 12.5mm round braces, fabric cover.
+# Join: 37mm corner pocket, frames butt flush, join post fills with no overlap.
 
 module ISOframe
   module StandDesigner
@@ -133,56 +133,76 @@ module ISOframe
             defn
           end
 
-          # Snap wall_b to wall_a's viewer-right tip at +90° (plan), with join post.
-          # Height of join post = min post tip of the two walls.
+          # Snap wall_b to wall_a at 90° with a 37mm join post in the corner pocket.
+          # Frames butt on end/front faces — join post fills the 37×37 pocket with
+          # no intersection (v0.1.89 centred the post on the tip → ~18.5mm overlap).
           def join_walls_at_right_angle!(wall_a, wall_b)
             return false unless wall_a && wall_a.valid? && wall_b && wall_b.valid?
             return false if wall_a.entityID == wall_b.entityID
             model = wall_a.model
             ha = wall_height_key(wall_a)
             hb = wall_height_key(wall_b)
-            tip = [post_tip_mm(ha), post_tip_mm(hb)].min
+            tip_h = [post_tip_mm(ha), post_tip_mm(hb)].min
             wb = wall_local_width_mm(wall_b)
+            half = C::HALF_POST_MM
 
-            # Corner = A's viewer-right tip (local 0).
-            corner = viewer_right_tip_world(wall_a)
+            # A's viewer-right outer tip (local x=0 plane / end face).
+            tip = viewer_right_tip_world(wall_a)
             z = Floorspace.module_base_z(model)
-            corner = Geom::Point3d.new(corner.x, corner.y, z)
+            tip = Geom::Point3d.new(tip.x, tip.y, z)
 
             xa = wall_a.transformation.xaxis
             ya = wall_a.transformation.yaxis
-            # +90° about Z in plan: (x,y) → (−y, x)
-            xb = Geom::Vector3d.new(-ya.x, -ya.y, 0)
-            yb = Geom::Vector3d.new(xa.x, xa.y, 0)
+            begin
+              xa.length = 1.0
+              ya.length = 1.0
+            rescue StandardError
+              xa = Geom::Vector3d.new(-1, 0, 0)
+              ya = Geom::Vector3d.new(0, -1, 0)
+            end
+
+            # 37mm pocket outside A's end and toward A's front (+ya):
+            #   x ∈ [-POST, 0] (beyond end face), y ∈ [+half, +half+POST] (beyond front).
+            # Join centre at pocket middle — faces flush with A end + A front.
+            # Pocket centre: −half along xa (past end), +POST along ya (past front).
+            post = C::POST_MM
+            join_centre = Geom::Point3d.new(
+              tip.x - xa.x * half.mm + ya.x * post.mm,
+              tip.y - xa.y * half.mm + ya.y * post.mm,
+              z
+            )
+
+            # B runs along A's front (+ya); RH: xb = ya, yb = −xa.
+            xb = Geom::Vector3d.new(ya.x, ya.y, 0)
+            yb = Geom::Vector3d.new(-xa.x, -xa.y, 0)
             zb = Geom::Vector3d.new(0, 0, 1)
             begin
               xb.length = 1.0
               yb.length = 1.0
             rescue StandardError
               xb = Geom::Vector3d.new(0, -1, 0)
-              yb = Geom::Vector3d.new(-1, 0, 0)
+              yb = Geom::Vector3d.new(1, 0, 0)
             end
 
-            # B's viewer-left tip (local width) sits on the corner so B runs away
-            # from A at 90°; starter of B stays on the join (left-anchored on B).
-            # origin_b + xb * wb = corner  →  origin_b = corner − xb * wb
-            origin_b = Geom::Point3d.new(
-              corner.x - xb.x * wb.mm,
-              corner.y - xb.y * wb.mm,
+            # B's connecting outer face (viewer-left / local width) flushes with
+            # the join post face toward +ya (front of pocket) — no overlap.
+            join_front_face = Geom::Point3d.new(
+              join_centre.x + ya.x * half.mm,
+              join_centre.y + ya.y * half.mm,
               z
             )
-            tr_b = Geom::Transformation.new(xb, yb, zb, origin_b)
-            wall_b.transformation = tr_b
+            # origin_b + xb * wb = join_front_face
+            origin_b = Geom::Point3d.new(
+              join_front_face.x - xb.x * wb.mm,
+              join_front_face.y - xb.y * wb.mm,
+              z
+            )
+            wall_b.transformation = Geom::Transformation.new(xb, yb, zb, origin_b)
             Constraints.snap_floor_sitting_to_floor!(wall_b)
 
-            # Optional 37 mm join post at the corner (sold-as-option, click place).
-            defn = join_post_definition!(model, tip)
-            tr_j = Geom::Transformation.new(
-              Geom::Vector3d.new(1, 0, 0),
-              Geom::Vector3d.new(0, 1, 0),
-              Geom::Vector3d.new(0, 0, 1),
-              corner
-            )
+            # Join post oriented with A so its faces align with the pocket.
+            defn = join_post_definition!(model, tip_h)
+            tr_j = Geom::Transformation.new(xa, ya, zb, join_centre)
             join = model.active_entities.add_instance(defn, tr_j)
             join.name = C::JOIN_INSTANCE_NAME
             Attributes.set_many(join, {
@@ -191,7 +211,7 @@ module ISOframe
               ::ISOframe::StandDesigner::Constants::KEY_TYPE =>
                 ::ISOframe::StandDesigner::Constants::TYPE_FABRIC_JOIN,
               ::ISOframe::StandDesigner::Constants::KEY_HEIGHT =>
-                (tip <= post_tip_mm(ha) ? ha : hb).to_s,
+                (tip_h <= post_tip_mm(ha) ? ha : hb).to_s,
               ::ISOframe::StandDesigner::Constants::KEY_FLOOR_SLIDE => '1'
             })
             Constraints.mark_floor_slide!(join)

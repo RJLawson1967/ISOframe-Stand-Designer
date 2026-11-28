@@ -13,6 +13,7 @@
 # v0.1.86: braces; Place always 900×Midi (no stale resized def).
 # v0.1.87: snap_width 900+k×250 (fixes 900→1000); Super-Maxi 4 braces.
 # v0.1.89: Frame Size grows right; Fabric Join 90° + join post.
+# v0.1.90: Join pocket flush (no ~18.5mm overlap).
 
 module ISOframe
   module StandDesigner
@@ -37,7 +38,7 @@ module ISOframe
       def build_dialog
         dlg = UI::HtmlDialog.new(
           dialog_title: 'ISOframe Stand Designer',
-          preferences_key: 'ISOframeStandDesignerDialog_v0189',
+          preferences_key: 'ISOframeStandDesignerDialog_v0190',
           scrollable: true,
           resizable: true,
           width: 300,
