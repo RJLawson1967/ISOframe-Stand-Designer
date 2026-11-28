@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Fabric Join (v0.1.92) — click near the mating end of each wall (left or right).
-# Snap at 90° with 37mm outer-corner join post. L flips by chosen ends + B side.
+# Fabric Join (v0.1.93) — click near the mating end of each wall (left or right).
+# Snap at 90° with 37mm outer-corner join post. Never mirrors/reflects either wall.
 
 module ISOframe
   module StandDesigner
@@ -118,10 +118,10 @@ module ISOframe
             if @wall_a && @wall_a.valid?
               side = @end_a == :left ? 'LEFT' : 'RIGHT'
               Sketchup.status_text =
-                "Fabric Join: wall A #{side} end locked — click near LEFT or RIGHT end of second wall. Esc cancels."
+                "Fabric Join: wall A #{side} end locked — click near LEFT or RIGHT end of second wall (no mirror). Esc cancels."
             else
               Sketchup.status_text =
-                'Fabric Join: click near the LEFT or RIGHT end of the first Fabric wall (anchor).'
+                'Fabric Join: click near the LEFT or RIGHT end of the first Fabric wall (anchor; never mirrors).'
             end
           end
 
@@ -144,7 +144,7 @@ module ISOframe
               a_side = @end_a == :left ? 'left' : 'right'
               b_side = @end_b == :left ? 'left' : 'right'
               Sketchup.status_text =
-                "Fabric Join: #{a_side}↔#{b_side} ends at 90° with 37 mm outer-corner post."
+                "Fabric Join: #{a_side}↔#{b_side} ends at 90° (no mirror; outer-corner post)."
               model.commit_operation
               @wall_a = nil
               @end_a = nil

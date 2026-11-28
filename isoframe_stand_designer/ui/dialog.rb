@@ -16,6 +16,7 @@
 # v0.1.90: Join pocket flush (no ~18.5mm overlap).
 # v0.1.91: Outer-corner join per plan; starter packs viewer-left.
 # v0.1.92: Join chooses left/right mating ends (L flips either way).
+# v0.1.93: Join never mirrors/reflects walls (RH axes only).
 
 module ISOframe
   module StandDesigner
@@ -40,7 +41,7 @@ module ISOframe
       def build_dialog
         dlg = UI::HtmlDialog.new(
           dialog_title: 'ISOframe Stand Designer',
-          preferences_key: 'ISOframeStandDesignerDialog_v0192',
+          preferences_key: 'ISOframeStandDesignerDialog_v0193',
           scrollable: true,
           resizable: true,
           width: 300,

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Fabric product sizes (v0.1.92). Isolated from Wave Constants::HEIGHTS_MM / bay.
-# Starter left; join picks left/right ends (L flips); outer-corner post plan.
+# Fabric product sizes (v0.1.93). Isolated from Wave Constants::HEIGHTS_MM / bay.
+# Join ends kept; never mirror walls (RH only).
 
 module ISOframe
   module StandDesigner
@@ -43,8 +43,8 @@ module ISOframe
           DEFAULT_HEIGHT = 'midi'
           HEIGHT_SNAP_ORDER = %w[midi maxi super_maxi ultra_maxi].freeze
 
-          DEFN_PREFIX = 'ISOframe Fabric Wall v92'
-          JOIN_DEFN_PREFIX = 'ISOframe Fabric Join Post v92'
+          DEFN_PREFIX = 'ISOframe Fabric Wall v93'
+          JOIN_DEFN_PREFIX = 'ISOframe Fabric Join Post v93'
           INSTANCE_NAME = 'ISOframe Fabric Wall'
           JOIN_INSTANCE_NAME = 'ISOframe Fabric Join'
           GROUP_POST = 'FabricPost'
