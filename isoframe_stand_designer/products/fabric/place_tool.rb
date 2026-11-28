@@ -74,7 +74,7 @@ module ISOframe
               model.selection.clear
               model.selection.add(inst)
               Sketchup.status_text =
-                'Fabric Midi placed — use Fabric Edge Snap to drag height/width.'
+                'Fabric Midi placed — select it, then Frame Size to set height/width.'
               model.commit_operation
             rescue StandardError => e
               model.abort_operation

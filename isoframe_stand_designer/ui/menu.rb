@@ -3,6 +3,7 @@
 # v0.1.81: Panel / License / About at top level; Wave tools under Wave submenu.
 # Other product lines get empty “coming soon” submenus (firewall shells).
 # v0.1.82: Fabric submenu — Place Midi + Edge Snap (no flex).
+# v0.1.84: Frame Size replaces Edge Snap.
 
 module ISOframe
   module StandDesigner
@@ -57,7 +58,7 @@ module ISOframe
       def install_fabric_submenu!(menu)
         fabric = menu.add_submenu(Products.label_for('fabric'))
         fabric.add_item('Place Fabric Midi (900×2270)') { Products::Fabric.run_place_midi! }
-        fabric.add_item('Fabric Edge Snap…') { Products::Fabric.run_edge_snap! }
+        fabric.add_item('Frame Size…') { Products::Fabric.run_frame_size! }
       end
 
       def install_shell_submenu!(menu, id, mod)
