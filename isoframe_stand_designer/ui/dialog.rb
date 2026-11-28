@@ -12,6 +12,7 @@
 # v0.1.85: Fabric outer-to-outer width; bottom rail coplanar with posts/top.
 # v0.1.86: braces; Place always 900×Midi (no stale resized def).
 # v0.1.87: snap_width 900+k×250 (fixes 900→1000); Super-Maxi 4 braces.
+# v0.1.89: Frame Size grows right; Fabric Join 90° + join post.
 
 module ISOframe
   module StandDesigner
@@ -36,7 +37,7 @@ module ISOframe
       def build_dialog
         dlg = UI::HtmlDialog.new(
           dialog_title: 'ISOframe Stand Designer',
-          preferences_key: 'ISOframeStandDesignerDialog_v0184',
+          preferences_key: 'ISOframeStandDesignerDialog_v0189',
           scrollable: true,
           resizable: true,
           width: 300,
@@ -85,6 +86,7 @@ module ISOframe
         # Fabric tab — Products::Fabric only (no Wave flex / no Edge Snap).
         bind.call('run_fabric_place') { Products::Fabric.run_place_midi! }
         bind.call('run_fabric_frame_size') { Products::Fabric.run_frame_size! }
+        bind.call('run_fabric_join') { Products::Fabric.run_join! }
       end
     end
   end

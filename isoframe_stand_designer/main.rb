@@ -36,6 +36,7 @@ module ISOframe
         products/fabric/geometry
         products/fabric/place_tool
         products/fabric/frame_size
+        products/fabric/join_tool
         products/fabric
         products/lumen
         products/ripple

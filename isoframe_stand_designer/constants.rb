@@ -10,6 +10,7 @@ module ISOframe
       TYPE_FLOORSPACE = 'floorspace'
       TYPE_COUNTER = 'counter'
       TYPE_FABRIC_WALL = 'fabric_wall'
+      TYPE_FABRIC_JOIN = 'fabric_join'
       KEY_FABRIC_WIDTH_MM = 'fabric_width_mm'
       POST_MM = 37.0
       HALF_POST_MM = POST_MM / 2.0

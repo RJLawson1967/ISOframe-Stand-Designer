@@ -59,6 +59,7 @@ module ISOframe
         fabric = menu.add_submenu(Products.label_for('fabric'))
         fabric.add_item('Place Fabric Midi (900×2270)') { Products::Fabric.run_place_midi! }
         fabric.add_item('Frame Size…') { Products::Fabric.run_frame_size! }
+        fabric.add_item('Join 90°…') { Products::Fabric.run_join! }
       end
 
       def install_shell_submenu!(menu, id, mod)
