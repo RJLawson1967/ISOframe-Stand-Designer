@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Procedural Fabric wall (v0.1.86) — 37mm Al frame + 12.5mm round braces, fabric cover.
-# Width is outer-to-outer (edge-to-edge). Place always rebuilds so cache cannot stick.
+# Procedural Fabric wall (v0.1.87) — 37mm Al frame + 12.5mm round braces, fabric cover.
+# Width is outer-to-outer. snap_width keeps 900 base (never rounds 900→1000).
 
 module ISOframe
   module StandDesigner
@@ -21,12 +21,17 @@ module ISOframe
             g - C::GRAPHIC_TOP_ABOVE_POST_MM
           end
 
+          # Width = 900 + k×250. Never snap the 900 starter via (w/250).round
+          # (that turns 900 into 1000 because 900/250 = 3.6 → 4).
           def snap_width_mm(raw_mm)
             w = raw_mm.to_f
-            w = C::STARTER_WIDTH_MM if w < C::STARTER_WIDTH_MM
+            base = C::STARTER_WIDTH_MM
             step = C::WIDTH_STEP_MM
-            snapped = (w / step).round * step
-            snapped = C::STARTER_WIDTH_MM if snapped < C::STARTER_WIDTH_MM
+            w = base if w < base
+            rem = w - base
+            steps = (rem / step).round
+            steps = 0 if steps < 0
+            snapped = base + (steps * step)
             snapped = 50_000.0 if snapped > 50_000.0
             snapped.to_f
           end

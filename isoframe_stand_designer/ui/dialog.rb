@@ -11,6 +11,7 @@
 # v0.1.84: Fabric Frame Size dialog (replaces Edge Snap); bottom rear Al rail.
 # v0.1.85: Fabric outer-to-outer width; bottom rail coplanar with posts/top.
 # v0.1.86: braces; Place always 900×Midi (no stale resized def).
+# v0.1.87: snap_width 900+k×250 (fixes 900→1000); Super-Maxi 4 braces.
 
 module ISOframe
   module StandDesigner

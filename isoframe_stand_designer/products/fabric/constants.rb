@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-# Fabric product sizes (v0.1.86). Isolated from Wave Constants::HEIGHTS_MM / bay.
+# Fabric product sizes (v0.1.87). Isolated from Wave Constants::HEIGHTS_MM / bay.
 # Width is outer-to-outer (edge-to-edge). Fabric covers entire Al frame; Z ≥ floor top.
 
 module ISOframe
@@ -21,10 +21,11 @@ module ISOframe
           BRACE_DIAMETER_MM = 12.5
           BRACE_SEGMENTS = 20
           # Brace centre-line Z (mm AFF / local) by height class.
+          # Super-Maxi: four braces (keep Midi 1400 when stepping up) + 2200.
           BRACE_Z_MM = {
             'midi' => [950.0, 1400.0].freeze,
             'maxi' => [950.0, 1600.0].freeze,
-            'super_maxi' => [950.0, 1600.0, 2200.0].freeze,
+            'super_maxi' => [950.0, 1400.0, 1600.0, 2200.0].freeze,
             'ultra_maxi' => [950.0, 1600.0, 3000.0].freeze
           }.freeze
 
@@ -42,7 +43,7 @@ module ISOframe
           DEFAULT_HEIGHT = 'midi'
           HEIGHT_SNAP_ORDER = %w[midi maxi super_maxi ultra_maxi].freeze
 
-          DEFN_PREFIX = 'ISOframe Fabric Wall v86'
+          DEFN_PREFIX = 'ISOframe Fabric Wall v87'
           INSTANCE_NAME = 'ISOframe Fabric Wall'
           GROUP_POST = 'FabricPost'
           GROUP_GRAPHIC = 'FabricGraphic'
