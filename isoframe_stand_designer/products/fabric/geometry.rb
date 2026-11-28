@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-# Procedural Fabric wall (v0.1.87) — 37mm Al frame + 12.5mm round braces, fabric cover.
+# Procedural Fabric wall (v0.1.88) — 37mm Al frame + 12.5mm round braces, fabric cover.
 # Width is outer-to-outer. snap_width keeps 900 base (never rounds 900→1000).
 
 module ISOframe
